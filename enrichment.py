@@ -104,22 +104,148 @@ CHECKOUT_PATHS = [
     "/payment", "/pago", "/paiement", "/pagamento",
 ]
 
-# Product listing paths (catches BNPL widgets on product pages)
-PRODUCT_PATHS = [
-    "/products", "/shop", "/tienda", "/boutique", "/negozio",
-]
-
 
 def _fetch_checkout_pages(domain):
-    """Try common checkout/cart/product paths. Return combined HTML."""
+    """Try common checkout/cart paths. Return combined HTML."""
     combined = []
     base = f"https://{domain}"
-    for path in CHECKOUT_PATHS + PRODUCT_PATHS:
+    for path in CHECKOUT_PATHS:
         html = _fetch_page(f"{base}{path}")
         if html:
             combined.append(html)
-            if len(combined) >= 3:  # Cap at 3 extra pages to save time
+            if len(combined) >= 2:
                 break
+    return "\n".join(combined) if combined else None
+
+
+# ── PRODUCT PAGE DISCOVERY ──────────────────────────────────
+# URL patterns that indicate a product detail page
+PRODUCT_URL_PATTERNS = re.compile(
+    r'/(?:'
+    r'product|producto|produit|prodotto|pd|item|artikel'  # /product/slug
+    r')/[\w-]+'
+    r'|/p/[\w-]+'  # short /p/slug
+    r'|/shop/[\w-]+/[\w-]+'  # /shop/cat/product
+    r'|/collections/[\w-]+/products/[\w-]+'  # Shopify
+    r'|/tienda/[\w-]+/[\w-]+'  # ES
+    r'|/boutique/[\w-]+/[\w-]+'  # FR
+    , re.IGNORECASE,
+)
+
+# Sitemap URL patterns for products
+SITEMAP_PRODUCT_PATTERNS = re.compile(
+    r'<loc>(https?://[^<]*/(?:product|producto|produit|prodotto|p|pd|item|shop/[^<]+))</loc>',
+    re.IGNORECASE,
+)
+
+
+def _find_product_urls_from_homepage(html, domain):
+    """
+    Extract real product page URLs from homepage links.
+    Most e-commerce homepages link to featured/bestseller products.
+    """
+    product_urls = []
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        base = f"https://{domain}"
+        for tag in soup.find_all("a", href=True):
+            href = tag["href"].strip()
+            # Make absolute
+            if href.startswith("/"):
+                href = base + href
+            elif not href.startswith("http"):
+                continue
+            # Must be same domain
+            if domain not in href:
+                continue
+            # Match product URL pattern
+            if PRODUCT_URL_PATTERNS.search(href):
+                product_urls.append(href)
+                if len(product_urls) >= 10:
+                    break
+    except Exception:
+        pass
+    return product_urls
+
+
+def _find_product_urls_from_sitemap(domain):
+    """
+    Find real product URLs from sitemap.xml.
+    Product pages are always in the sitemap — they need SEO indexing.
+    """
+    product_urls = []
+    try:
+        # Try main sitemap
+        sitemap = _fetch_page(f"https://{domain}/sitemap.xml")
+        if not sitemap:
+            return []
+
+        # Check for sitemap index (sitemap of sitemaps)
+        product_sitemap_url = None
+        if "<sitemapindex" in sitemap.lower():
+            # Find product-specific sitemap
+            for pattern in [r'<loc>(https?://[^<]*product[^<]*sitemap[^<]*)</loc>',
+                           r'<loc>(https?://[^<]*sitemap[^<]*product[^<]*)</loc>',
+                           r'<loc>(https?://[^<]*sitemap[^<]*)</loc>']:
+                matches = re.findall(pattern, sitemap, re.I)
+                for m in matches:
+                    if any(kw in m.lower() for kw in ["product", "produit", "producto"]):
+                        product_sitemap_url = m
+                        break
+                if product_sitemap_url:
+                    break
+            if product_sitemap_url:
+                sitemap = _fetch_page(product_sitemap_url)
+                if not sitemap:
+                    return []
+
+        # Extract product URLs (max first 100KB to save time)
+        for match in SITEMAP_PRODUCT_PATTERNS.findall(sitemap[:100000]):
+            product_urls.append(match)
+            if len(product_urls) >= 10:
+                break
+    except Exception:
+        pass
+    return product_urls
+
+
+def _scrape_product_pages(domain, homepage_html=None):
+    """
+    Find and scrape real product pages to detect BNPL widgets.
+    BNPL providers show "Pay in 3 installments with Klarna" on the
+    product page — this is a selling point, so it's in the static HTML.
+    
+    Strategy:
+    1. Extract product URLs from homepage links (fastest)
+    2. Fall back to sitemap product discovery
+    3. Scrape up to 3 product pages
+    """
+    product_urls = []
+
+    # Strategy 1: From homepage links
+    if homepage_html:
+        product_urls = _find_product_urls_from_homepage(homepage_html, domain)
+
+    # Strategy 2: From sitemap (if homepage didn't have enough)
+    if len(product_urls) < 2:
+        sitemap_urls = _find_product_urls_from_sitemap(domain)
+        product_urls.extend(sitemap_urls)
+
+    # Deduplicate
+    product_urls = list(dict.fromkeys(product_urls))
+
+    if not product_urls:
+        return None
+
+    # Scrape up to 3 product pages
+    combined = []
+    for url in product_urls[:5]:  # Try 5, keep 3 successes
+        html = _fetch_page(url)
+        if html:
+            combined.append(html)
+            if len(combined) >= 3:
+                break
+
     return "\n".join(combined) if combined else None
 
 
@@ -136,9 +262,15 @@ PSP_PATTERNS = {p: _build_regex(p) for p in KNOWN_PSPS}
 
 
 def detect_from_html(html):
-    """Detect BNPL competitors, PSPs, and ad pixels from HTML."""
+    """Detect BNPL competitors, PSPs, and ad pixels from HTML.
+    
+    Includes JS source analysis: even on SPA/React sites, the <script src>
+    tags and data-attributes are in the static HTML because the browser
+    needs them to know WHAT JavaScript to load.
+    """
     soup = BeautifulSoup(html, "html.parser")
 
+    # Collect all script sources and inline JS
     all_scripts = " ".join(
         (tag.get("src", "") + " " + (tag.string or ""))
         for tag in soup.find_all("script")
@@ -148,14 +280,129 @@ def detect_from_html(html):
         tag.get("href", "") for tag in soup.find_all("a")
     ).lower()
 
-    combined = html.lower() + " " + all_scripts + " " + all_links
+    # Collect ALL data-* attributes from all elements
+    # BNPL widgets use data-klarna, data-alma, data-sequra, etc.
+    all_data_attrs = []
+    for tag in soup.find_all(True):
+        for attr_name, attr_val in tag.attrs.items():
+            if isinstance(attr_name, str):
+                all_data_attrs.append(attr_name.lower())
+            if isinstance(attr_val, str):
+                all_data_attrs.append(attr_val.lower())
+            elif isinstance(attr_val, list):
+                all_data_attrs.extend(str(v).lower() for v in attr_val)
+    data_attrs_text = " ".join(all_data_attrs)
 
-    # Word-boundary matching (no more false positives from blog articles)
+    # Collect all CSS class names and IDs (widgets often have klarna-placement, alma-widget, etc.)
+    all_classes_ids = []
+    for tag in soup.find_all(True):
+        classes = tag.get("class", [])
+        if isinstance(classes, list):
+            all_classes_ids.extend(c.lower() for c in classes)
+        tag_id = tag.get("id", "")
+        if tag_id:
+            all_classes_ids.append(tag_id.lower())
+    classes_ids_text = " ".join(all_classes_ids)
+
+    combined = html.lower() + " " + all_scripts + " " + all_links + " " + data_attrs_text + " " + classes_ids_text
+
+    # ── JS SOURCE ANALYSIS: Script URLs and SDK signatures ──
+    # These are ALWAYS in static HTML — the browser must know what to load
+    JS_BNPL_SIGNATURES = {
+        # Klarna
+        "klarna": [
+            "js.klarna.com", "klarna.com/web-sdk", "klarna-payment",
+            "klarna-placement", "data-klarna", "klarnaasync",
+            "klarna.payments", "klarna-on-site-messaging",
+            "klarna-osm", "data-purchase-amount",  # Klarna OSM widget
+            "x-]klarna-rendering",
+        ],
+        # Alma
+        "alma": [
+            "cdn.alma.eu", "alma-widget", "data-alma",
+            "alma.widgets", "alma-payment-plans", "alma.eu/js",
+            "alma-badge", "alma-installments",
+        ],
+        # Sequra
+        "sequra": [
+            "sequra.js", "data-sequra", "sequraconfiguration",
+            "sequra.es", "cdn.sequra", "sequra-widget",
+            "sequra-promotion", "sequra-payment",
+        ],
+        # Oney
+        "oney": [
+            "oney.js", "data-oney", "oney-widget",
+            "cdn.oney", "oney.io", "oney-simulation",
+            "oney-facilypay",
+        ],
+        # Afterpay / Clearpay
+        "afterpay": [
+            "afterpay.js", "data-afterpay", "afterpay-placement",
+            "js.afterpay.com", "static.afterpay.com",
+            "afterpay-widget", "clearpay-placement",
+            "js.clearpay.co", "static.clearpay.co",
+        ],
+        # Cofidis
+        "cofidis": [
+            "cofidis-widget", "data-cofidis", "cdn.cofidis",
+            "simulador-cofidis", "cofidis.es", "cofidis.fr",
+        ],
+        # Aplazame
+        "aplazame": [
+            "aplazame.com/js", "data-aplazame", "aplazame-widget",
+            "cdn.aplazame.com",
+        ],
+        # Zip (Quadpay)
+        "zip": [
+            "widgets.quadpay.com", "quadpay-widget",
+            "zip.co/widget", "data-quadpay",
+        ],
+        # PayPal Pay Later
+        "pay later": [
+            "paypal.com/sdk/js.*enable-funding=paylater",
+            "data-sdk-integration-source.*paylater",
+            "paypal-paylater", "pp-paylater",
+        ],
+        # Pledg
+        "pledg": [
+            "pledg.co", "data-pledg", "cdn.pledg",
+        ],
+        # Pagantis -> now Sequra
+        "pagantis": [
+            "pagantis.com", "cdn.pagantis",
+        ],
+        # Cetelem
+        "cetelem": [
+            "cetelem-widget", "simulador-cetelem",
+            "cetelem.es", "cetelem.fr",
+        ],
+        # Soisy
+        "soisy": [
+            "soisy.it", "data-soisy", "cdn.soisy",
+        ],
+        # Pagolight
+        "pagolight": [
+            "pagolight-widget", "data-pagolight", "pagolight.it",
+        ],
+    }
+
     found_bnpl = []
+
+    # Standard word-boundary matching on combined text
     for comp, pattern in COMPETITOR_PATTERNS.items():
         if pattern.search(combined):
             found_bnpl.append(comp.title())
 
+    # JS SDK signature matching (catches JS-loaded widgets)
+    for comp_name, signatures in JS_BNPL_SIGNATURES.items():
+        if comp_name.title() in found_bnpl:
+            continue  # Already found via regex
+        for sig in signatures:
+            if sig in combined:
+                found_bnpl.append(comp_name.title())
+                break
+
+    # PSP detection (same word-boundary approach)
     found_psp = []
     for psp, pattern in PSP_PATTERNS.items():
         if pattern.search(combined):
@@ -331,16 +578,28 @@ def enrich_single_domain(domain):
         structured = _extract_structured_data(html)
         all_bnpl.extend(structured)
 
-    # Phase 2: Checkout/cart/product pages
-    checkout_html = _fetch_checkout_pages(domain)
-    if checkout_html:
-        bnpl, psp, meta, gads = detect_from_html(checkout_html)
-        all_bnpl.extend(bnpl)
-        all_psp.extend(psp)
-        meta_pixel = meta_pixel or meta
-        google_ads = google_ads or gads
+    # Phase 2: Product pages (highest hit rate for BNPL detection)
+    # BNPL widgets show "Pay in 3 with Klarna" on product pages — static HTML
+    if not all_bnpl:
+        product_html = _scrape_product_pages(domain, homepage_html=html)
+        if product_html:
+            bnpl, psp, meta, gads = detect_from_html(product_html)
+            all_bnpl.extend(bnpl)
+            all_psp.extend(psp)
+            meta_pixel = meta_pixel or meta
+            google_ads = google_ads or gads
 
-    # Phase 3: Sitemap/robots.txt checkout discovery
+    # Phase 3: Checkout/cart pages
+    if not all_bnpl:
+        checkout_html = _fetch_checkout_pages(domain)
+        if checkout_html:
+            bnpl, psp, meta, gads = detect_from_html(checkout_html)
+            all_bnpl.extend(bnpl)
+            all_psp.extend(psp)
+            meta_pixel = meta_pixel or meta
+            google_ads = google_ads or gads
+
+    # Phase 4: Sitemap/robots.txt checkout discovery
     if not all_bnpl:
         checkout_urls = _find_checkout_from_sitemap(domain)
         for url in checkout_urls:
@@ -350,8 +609,8 @@ def enrich_single_domain(domain):
                 all_bnpl.extend(bnpl)
                 all_psp.extend(psp)
 
-    # Phase 4: Google Cache / Wayback fallback (if homepage blocked)
-    if not html and not checkout_html:
+    # Phase 5: Google Cache / Wayback fallback (if homepage blocked)
+    if not html and not all_bnpl:
         cached_html = _fetch_via_cache_fallback(domain)
         if cached_html:
             bnpl, psp, meta, gads = detect_from_html(cached_html)
@@ -360,7 +619,7 @@ def enrich_single_domain(domain):
             meta_pixel = meta_pixel or meta
             google_ads = google_ads or gads
 
-    # Phase 5: SERP fallback (last resort)
+    # Phase 6: SERP fallback (last resort)
     if not all_bnpl and not html:
         serp_comps = _serp_competitor_check(domain)
         all_bnpl.extend(serp_comps)
