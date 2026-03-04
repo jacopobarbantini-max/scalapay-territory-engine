@@ -433,6 +433,20 @@ with st.sidebar:
     w_ws = st.slider("Whitespace", 0.0, 0.5, SCORING_WEIGHTS["whitespace"], 0.05,
         help="Greenfield opportunity. Scores 10/10 if zero real BNPL competitors are detected on the merchant site. PayPal BNPL alone still counts as whitespace (8/10). Requires competitor detection enabled.")
 
+    # Dynamic weight sum
+    total_w = w_tier + w_pen + w_growth + w_warmth + w_ws
+    pct = int(round(total_w * 100))
+    if abs(total_w - 1.0) < 0.001:
+        color = "#34D399"
+        label = "✓"
+    elif total_w > 1.0:
+        color = "#EA5440"
+        label = "⚠"
+    else:
+        color = "#FBBF24"
+        label = "⚠"
+    st.markdown(f'<p style="font-size:0.85rem; font-weight:600; color:{color}; margin-top:4px;">{label} Total: {pct}%</p>', unsafe_allow_html=True)
+
     # ── FILTERS ──
     st.markdown('<hr class="sidebar-divider">', unsafe_allow_html=True)
     st.markdown("### Filters")
