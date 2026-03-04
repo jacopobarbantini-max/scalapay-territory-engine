@@ -35,7 +35,15 @@ st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap');
 
-    /* ─── GLOBAL ─── */
+    /* ─── DARK MODE PALETTE ───
+       BG:       #0E1117 (main), #1A1D23 (sidebar/cards)
+       Surface:  #242830 (elevated cards)
+       Border:   #2D3139
+       Text:     #FAFAFA (primary), #9CA3AF (secondary), #6B7280 (muted)
+       Coral:    #EA5440 (primary accent)
+       CoralLt:  #F27060 (hover)
+    ─── */
+
     .stApp {
         font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
     }
@@ -45,22 +53,22 @@ st.markdown("""
 
     /* ─── SIDEBAR ─── */
     section[data-testid="stSidebar"] {
-        background: #FDF5F3;
-        border-right: 1px solid #F0D5CE;
+        background: #1A1D23 !important;
+        border-right: 1px solid #2D3139;
     }
     section[data-testid="stSidebar"] .stMarkdown h3 {
         font-size: 0.8rem;
         font-weight: 600;
-        color: #8C939A;
+        color: #6B7280 !important;
         text-transform: uppercase;
         letter-spacing: 0.08em;
         margin-bottom: 4px;
     }
 
-    /* ─── HEADER COMPONENT ─── */
+    /* ─── HEADER ─── */
     .te-header {
         padding: 24px 0 20px 0;
-        border-bottom: 1px solid #F0D5CE;
+        border-bottom: 1px solid #2D3139;
         margin-bottom: 28px;
     }
     .te-logo-row {
@@ -71,7 +79,7 @@ st.markdown("""
     }
     .te-logo-badge {
         background: linear-gradient(135deg, #EA5440 0%, #F27060 100%);
-        color: white;
+        color: #FFFFFF !important;
         font-weight: 700;
         font-size: 0.7rem;
         padding: 5px 10px;
@@ -81,12 +89,12 @@ st.markdown("""
     .te-title {
         font-size: 1.75rem;
         font-weight: 700;
-        color: #1A1D21;
+        color: #FAFAFA !important;
         margin: 0;
         line-height: 1.2;
     }
     .te-subtitle {
-        color: #8C939A;
+        color: #9CA3AF !important;
         font-size: 0.92rem;
         margin: 4px 0 0 0;
         font-weight: 400;
@@ -94,80 +102,45 @@ st.markdown("""
 
     /* ─── SIDEBAR SECTIONS ─── */
     .sidebar-section {
-        background: #FFFFFF;
-        border: 1px solid #F0D5CE;
+        background: #242830;
+        border: 1px solid #2D3139;
         border-radius: 12px;
         padding: 16px;
         margin-bottom: 16px;
     }
-    .sidebar-section-title {
-        font-size: 0.72rem;
-        font-weight: 600;
-        color: #8C939A;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        margin-bottom: 12px;
-    }
     .sidebar-divider {
         border: none;
-        border-top: 1px solid #F0D5CE;
+        border-top: 1px solid #2D3139;
         margin: 20px 0;
     }
 
-    /* ─── INTEGRATION HELP TOOLTIPS ─── */
-    .integration-item {
-        display: flex;
-        align-items: flex-start;
-        gap: 10px;
-        padding: 10px 0;
-    }
-    .integration-icon {
-        width: 32px;
-        height: 32px;
-        border-radius: 8px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 1rem;
-        flex-shrink: 0;
-    }
-    .integration-icon-hs { background: #FFF4E5; }
-    .integration-icon-scrape { background: #EEF0FF; }
-    .integration-icon-ads { background: #F0FFF4; }
-    .integration-desc {
-        font-size: 0.78rem;
-        color: #6B7280;
-        line-height: 1.4;
-        margin-top: 2px;
-    }
-
-    /* ─── KPI METRIC CARDS ─── */
+    /* ─── KPI CARDS ─── */
     .kpi-card {
-        background: #FFFFFF;
-        border: 1px solid #F0D5CE;
+        background: #242830 !important;
+        border: 1px solid #2D3139;
         border-radius: 14px;
         padding: 22px 18px;
         text-align: center;
         transition: all 0.2s ease;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        box-shadow: 0 2px 8px rgba(0,0,0,0.3);
     }
     .kpi-card:hover {
         border-color: #EA5440;
-        box-shadow: 0 4px 12px rgba(234,84,64,0.10);
-        transform: translateY(-1px);
+        box-shadow: 0 4px 16px rgba(234,84,64,0.20);
+        transform: translateY(-2px);
     }
     .kpi-value {
         font-size: 1.8rem;
         font-weight: 700;
-        color: #1A1D21;
+        color: #FAFAFA !important;
         line-height: 1.2;
         margin-bottom: 4px;
     }
-    .kpi-value-gold { color: #B45309; }
-    .kpi-value-coral { color: #EA5440; }
-    .kpi-value-green { color: #059669; }
+    .kpi-value-gold { color: #FBBF24 !important; }
+    .kpi-value-coral { color: #EA5440 !important; }
+    .kpi-value-green { color: #34D399 !important; }
     .kpi-label {
-        color: #8C939A;
+        color: #6B7280 !important;
         font-size: 0.72rem;
         text-transform: uppercase;
         letter-spacing: 0.06em;
@@ -176,24 +149,24 @@ st.markdown("""
 
     /* ─── TIER BADGES ─── */
     .tier-gold {
-        background: #FEF3C7;
-        color: #92400E;
+        background: rgba(251,191,36,0.15);
+        color: #FBBF24;
         font-weight: 600;
         padding: 2px 10px;
         border-radius: 20px;
         font-size: 0.8rem;
     }
     .tier-silver {
-        background: #F1F5F9;
-        color: #475569;
+        background: rgba(156,163,175,0.15);
+        color: #9CA3AF;
         font-weight: 600;
         padding: 2px 10px;
         border-radius: 20px;
         font-size: 0.8rem;
     }
     .tier-bronze {
-        background: #FED7AA;
-        color: #9A3412;
+        background: rgba(251,146,60,0.15);
+        color: #FB923C;
         font-weight: 600;
         padding: 2px 10px;
         border-radius: 20px;
@@ -202,46 +175,49 @@ st.markdown("""
 
     /* ─── DATA TABLES ─── */
     div[data-testid="stDataFrame"] {
-        border: 1px solid #F0D5CE;
+        border: 1px solid #2D3139;
         border-radius: 12px;
         overflow: hidden;
     }
 
     /* ─── BUTTONS ─── */
     .stButton > button[kind="primary"] {
-        background: linear-gradient(135deg, #EA5440 0%, #F06050 100%);
+        background: linear-gradient(135deg, #EA5440 0%, #F27060 100%);
         border: none;
         border-radius: 10px;
         font-weight: 600;
         font-size: 0.9rem;
         padding: 10px 24px;
+        color: #FFFFFF !important;
         transition: all 0.2s ease;
-        box-shadow: 0 2px 8px rgba(234,84,64,0.25);
+        box-shadow: 0 2px 12px rgba(234,84,64,0.30);
     }
     .stButton > button[kind="primary"]:hover {
-        box-shadow: 0 4px 16px rgba(234,84,64,0.35);
+        box-shadow: 0 4px 20px rgba(234,84,64,0.45);
         transform: translateY(-1px);
     }
     .stButton > button[kind="secondary"] {
         border-radius: 10px;
         font-weight: 500;
-        border: 1px solid #F0D5CE;
+        border: 1px solid #2D3139;
+        color: #FAFAFA !important;
     }
 
     /* ─── TABS ─── */
     .stTabs [data-baseweb="tab-list"] {
         gap: 8px;
-        border-bottom: 1px solid #F0D5CE;
+        border-bottom: 1px solid #2D3139;
     }
     .stTabs [data-baseweb="tab"] {
         border-radius: 8px 8px 0 0;
         font-weight: 500;
         font-size: 0.85rem;
         padding: 8px 16px;
+        color: #9CA3AF !important;
     }
     .stTabs [aria-selected="true"] {
         border-bottom: 2px solid #EA5440 !important;
-        color: #EA5440;
+        color: #EA5440 !important;
     }
 
     /* ─── PROGRESS BAR ─── */
@@ -259,7 +235,7 @@ st.markdown("""
     }
     .phase-number {
         background: #EA5440;
-        color: white;
+        color: #FFFFFF !important;
         width: 26px;
         height: 26px;
         border-radius: 50%;
@@ -273,7 +249,7 @@ st.markdown("""
     .phase-text {
         font-size: 1rem;
         font-weight: 600;
-        color: #1A1D21;
+        color: #FAFAFA !important;
     }
 
     /* ─── LANDING STATE ─── */
@@ -289,11 +265,11 @@ st.markdown("""
     .landing-title {
         font-size: 1.25rem;
         font-weight: 600;
-        color: #1A1D21;
+        color: #FAFAFA !important;
         margin-bottom: 8px;
     }
     .landing-desc {
-        color: #8C939A;
+        color: #9CA3AF !important;
         font-size: 0.9rem;
         max-width: 400px;
         margin: 0 auto;
@@ -306,22 +282,22 @@ st.markdown("""
         align-items: center;
         justify-content: space-between;
         padding: 16px 0;
-        border-top: 1px solid #F0D5CE;
+        border-top: 1px solid #2D3139;
         margin-top: 32px;
     }
     .te-footer-left {
-        color: #8C939A;
+        color: #6B7280 !important;
         font-size: 0.78rem;
     }
     .te-footer-logo {
         display: flex;
         align-items: center;
         gap: 6px;
-        color: #8C939A;
+        color: #6B7280 !important;
         font-size: 0.75rem;
     }
     .te-footer-logo .scalapay-heart {
-        color: #EA5440;
+        color: #EA5440 !important;
         font-size: 0.85rem;
     }
 
@@ -329,15 +305,10 @@ st.markdown("""
     .streamlit-expanderHeader {
         font-weight: 500;
         font-size: 0.9rem;
+        color: #FAFAFA !important;
     }
 
-    /* ─── HIDE DEFAULT HEADER ─── */
-    header[data-testid="stHeader"] {
-        background: rgba(255,255,255,0.97);
-        backdrop-filter: blur(8px);
-    }
-
-    /* ─── SLIDER STYLING ─── */
+    /* ─── SLIDER ─── */
     .stSlider [data-baseweb="slider"] [role="slider"] {
         background-color: #EA5440;
     }
@@ -345,14 +316,14 @@ st.markdown("""
         background-color: #EA5440;
     }
 
-    /* ─── CHECKBOX ─── */
-    .stCheckbox label span[data-testid="stCheckbox"] {
-        color: #1A1D21;
-    }
-
     /* ─── ALERTS ─── */
     .stAlert {
         border-radius: 10px;
+    }
+
+    /* ─── DIVIDERS in main content ─── */
+    hr {
+        border-color: #2D3139 !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -374,8 +345,8 @@ with st.sidebar:
     st.markdown("""
     <div style="display: flex; align-items: center; gap: 8px; padding: 4px 0 16px 0;">
         <span style="color: #EA5440; font-size: 1.1rem;">♥</span>
-        <span style="font-weight: 600; font-size: 0.95rem; color: #3A4045;">scalapay</span>
-        <span style="color: #8C939A; font-size: 0.75rem; margin-left: auto;">Territory Engine</span>
+        <span style="font-weight: 600; font-size: 0.95rem; color: #FAFAFA;">scalapay</span>
+        <span style="color: #6B7280; font-size: 0.75rem; margin-left: auto;">Territory Engine</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -430,26 +401,26 @@ with st.sidebar:
         value=bool(os.getenv("HUBSPOT_API_KEY")),
         help="Cross-references every domain against your HubSpot CRM to find existing companies, active deals, and deal owners. Assigns a warmth label (Active Pipeline, In CRM No Deal, Net New, Lost 6m+ ago, Recently Lost, Existing Client) that feeds into the lead score.",
     )
-    st.markdown('<p style="font-size:0.75rem; color:#8C939A; margin-top:-10px; margin-bottom:12px;">Matches leads to CRM records, deal stages, and owners. Determines lead warmth for scoring.</p>', unsafe_allow_html=True)
+    st.markdown('<p style="font-size:0.75rem; color:#6B7280; margin-top:-10px; margin-bottom:12px;">Matches leads to CRM records, deal stages, and owners. Determines lead warmth for scoring.</p>', unsafe_allow_html=True)
 
     enable_scraping = st.checkbox(
         "Competitor Detection",
         value=False,
         help="Scrapes merchant websites (homepage, product pages, checkout paths, JS bundles) to detect BNPL competitors like Klarna, Alma, Sequra, and Oney. Also checks structured data, sitemaps, and DNS records. Uses 9 detection layers for ~75% coverage. Enables the whitespace score component.",
     )
-    st.markdown('<p style="font-size:0.75rem; color:#8C939A; margin-top:-10px; margin-bottom:12px;">Detects Klarna, Alma, Sequra & 11 more BNPL providers across 9 scraping layers. Feeds whitespace scoring.</p>', unsafe_allow_html=True)
+    st.markdown('<p style="font-size:0.75rem; color:#6B7280; margin-top:-10px; margin-bottom:12px;">Detects Klarna, Alma, Sequra & 11 more BNPL providers across 9 scraping layers. Feeds whitespace scoring.</p>', unsafe_allow_html=True)
 
     enable_ads_check = st.checkbox(
         "Ad Pixel Detection",
         value=False,
         help="Detects Meta (Facebook) Pixel and Google Ads conversion tags on merchant homepages. Merchants with active ad pixels are investing in customer acquisition — a signal they have budget and need checkout optimization. Requires competitor detection to be enabled.",
     )
-    st.markdown('<p style="font-size:0.75rem; color:#8C939A; margin-top:-10px; margin-bottom:12px;">Finds Meta Pixel & Google Ads tags. Signals ad spend = budget for checkout optimization.</p>', unsafe_allow_html=True)
+    st.markdown('<p style="font-size:0.75rem; color:#6B7280; margin-top:-10px; margin-bottom:12px;">Finds Meta Pixel & Google Ads tags. Signals ad spend = budget for checkout optimization.</p>', unsafe_allow_html=True)
 
     # ── SCORING WEIGHTS ──
     st.markdown('<hr class="sidebar-divider">', unsafe_allow_html=True)
     st.markdown("### Scoring Weights")
-    st.markdown('<p style="font-size:0.75rem; color:#8C939A; margin-bottom:8px;">Adjust how each component contributes to the final priority score (0–100).</p>', unsafe_allow_html=True)
+    st.markdown('<p style="font-size:0.75rem; color:#6B7280; margin-bottom:8px;">Adjust how each component contributes to the final priority score (0–100).</p>', unsafe_allow_html=True)
 
     w_tier = st.slider("Industry Tier", 0.0, 0.5, SCORING_WEIGHTS["tier"], 0.05,
         help="How well does BNPL convert in this vertical? Gold verticals (Apparel, Beauty, Pharma) have highest contribution margins. Mapped per country from Scalapay internal data.")
@@ -592,10 +563,10 @@ def run_pipeline():
 # ── GENERATE BUTTON ─────────────────────────────────────────
 col_btn1, col_btn2, _ = st.columns([1, 1, 3])
 with col_btn1:
-    generate = st.button("Generate Territory List", type="primary", use_container_width=True)
+    generate = st.button("Generate Territory List", type="primary", width='stretch')
 with col_btn2:
     if "result_df" in st.session_state and st.session_state.result_df is not None:
-        clear = st.button("Clear Results", use_container_width=True)
+        clear = st.button("Clear Results", width='stretch')
         if clear:
             st.session_state.result_df = None
             st.rerun()
@@ -622,7 +593,7 @@ if generate:
 if "result_df" in st.session_state and st.session_state.result_df is not None:
     df = st.session_state.result_df
 
-    st.markdown('<hr style="border:none; border-top:1px solid #F0D5CE; margin: 28px 0;">', unsafe_allow_html=True)
+    st.markdown('<hr style="border:none; border-top:1px solid #2D3139; margin: 28px 0;">', unsafe_allow_html=True)
 
     def render_kpi_cards(data):
         k1, k2, k3, k4, k5 = st.columns(5)
@@ -669,7 +640,7 @@ if "result_df" in st.session_state and st.session_state.result_df is not None:
         st.markdown("")
         st.dataframe(
             df[display_cols],
-            use_container_width=True,
+            width='stretch',
             height=500,
             column_config={
                 "Sales_Priority_Score": st.column_config.ProgressColumn(
@@ -697,7 +668,7 @@ if "result_df" in st.session_state and st.session_state.result_df is not None:
         gold_df = df[df["tier"] == "GOLD"] if "tier" in df.columns else df
         render_kpi_cards(gold_df)
         st.markdown("")
-        st.dataframe(gold_df[display_cols], use_container_width=True, height=400)
+        st.dataframe(gold_df[display_cols], width='stretch', height=400)
 
     with tab_whitespace:
         if "is_whitespace" in df.columns:
@@ -707,7 +678,7 @@ if "result_df" in st.session_state and st.session_state.result_df is not None:
             else:
                 render_kpi_cards(ws_df)
                 st.markdown("")
-                st.dataframe(ws_df[display_cols], use_container_width=True, height=400)
+                st.dataframe(ws_df[display_cols], width='stretch', height=400)
         else:
             st.info("Enable competitor detection in the sidebar to see whitespace opportunities.")
 
@@ -719,10 +690,10 @@ if "result_df" in st.session_state and st.session_state.result_df is not None:
                 st.markdown(f"#### {label}")
                 render_kpi_cards(cdf)
                 st.markdown("")
-                st.dataframe(cdf[display_cols], use_container_width=True, height=400)
+                st.dataframe(cdf[display_cols], width='stretch', height=400)
 
     # ── EXCEL EXPORT ──
-    st.markdown('<hr style="border:none; border-top:1px solid #F0D5CE; margin: 28px 0;">', unsafe_allow_html=True)
+    st.markdown('<hr style="border:none; border-top:1px solid #2D3139; margin: 28px 0;">', unsafe_allow_html=True)
 
     def generate_excel(dataframe: pd.DataFrame) -> bytes:
         output = io.BytesIO()
@@ -830,7 +801,7 @@ if "result_df" in st.session_state and st.session_state.result_df is not None:
             file_name=f"scalapay_territory_list_{timestamp}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             type="primary",
-            use_container_width=True,
+            width='stretch',
         )
     with col_dl2:
         csv_bytes = df.to_csv(index=False).encode("utf-8")
@@ -839,7 +810,7 @@ if "result_df" in st.session_state and st.session_state.result_df is not None:
             data=csv_bytes,
             file_name=f"scalapay_territory_list_{timestamp}.csv",
             mime="text/csv",
-            use_container_width=True,
+            width='stretch',
         )
 
     # ── Score Breakdown
