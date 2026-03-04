@@ -39,12 +39,6 @@ st.set_page_config(
 # ── CUSTOM CSS ──────────────────────────────────────────────
 st.markdown("""
 <style>
-    .stApp {
-        background-color: #0a0a0f;
-    }
-    section[data-testid="stSidebar"] {
-        background-color: #111118;
-    }
     .main-header {
         background: linear-gradient(135deg, #6C3AED 0%, #2563EB 50%, #0EA5E9 100%);
         -webkit-background-clip: text;
@@ -54,14 +48,14 @@ st.markdown("""
         margin-bottom: 0;
     }
     .sub-header {
-        color: #94a3b8;
+        color: #64748b;
         font-size: 1.05rem;
         margin-top: -8px;
         margin-bottom: 24px;
     }
     .metric-card {
-        background: linear-gradient(135deg, #1e1b4b 0%, #172554 100%);
-        border: 1px solid #334155;
+        background: linear-gradient(135deg, #f8fafc 0%, #eef2ff 100%);
+        border: 1px solid #e2e8f0;
         border-radius: 12px;
         padding: 20px;
         text-align: center;
@@ -69,19 +63,19 @@ st.markdown("""
     .metric-value {
         font-size: 2rem;
         font-weight: 700;
-        color: #e2e8f0;
+        color: #1e293b;
     }
     .metric-label {
-        color: #94a3b8;
+        color: #64748b;
         font-size: 0.85rem;
         text-transform: uppercase;
         letter-spacing: 0.05em;
     }
-    .tier-gold { color: #fbbf24; font-weight: 700; }
-    .tier-silver { color: #94a3b8; font-weight: 700; }
-    .tier-bronze { color: #d97706; font-weight: 700; }
+    .tier-gold { color: #b45309; font-weight: 700; }
+    .tier-silver { color: #475569; font-weight: 700; }
+    .tier-bronze { color: #c2410c; font-weight: 700; }
     div[data-testid="stDataFrame"] {
-        border: 1px solid #1e293b;
+        border: 1px solid #e2e8f0;
         border-radius: 8px;
     }
 </style>
@@ -565,7 +559,7 @@ else:
     st.markdown("""
     <div style="text-align: center; padding: 60px 20px; color: #64748b;">
         <p style="font-size: 3rem; margin-bottom: 8px;">🎯</p>
-        <p style="font-size: 1.2rem; font-weight: 600; color: #cbd5e1;">
+        <p style="font-size: 1.2rem; font-weight: 600; color: #475569;">
             Upload Similarweb data & hit Generate
         </p>
         <p style="font-size: 0.9rem;">
