@@ -220,7 +220,7 @@ def classify_deal(deals: List[dict]) -> dict:
 
 # ── MAIN ENRICHMENT FUNCTION ────────────────────────────────
 def enrich_with_hubspot(df: pd.DataFrame) -> pd.DataFrame:
-    """Add HubSpot columns to the leads DataFrame."""
+    """Add HubSpot columns to the leads DataFrame. Multithreaded."""
     api_key = _get_api_key()
 
     # Prepare new columns
@@ -238,42 +238,67 @@ def enrich_with_hubspot(df: pd.DataFrame) -> pd.DataFrame:
         log.warning("No HUBSPOT_API_KEY — all leads marked as Net New.")
         return df
 
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from threading import Lock
+
     total = len(df)
-    for i, (idx, row) in enumerate(df.iterrows()):
+    counter = {"done": 0}
+    lock = Lock()
+
+    def process_domain(idx, domain):
+        try:
+            result = {"idx": idx}
+            company = _search_company_by_domain(domain, api_key)
+            if not company:
+                return result
+
+            props = company.get("properties", {})
+            company_id = company.get("id")
+
+            result["hs_exists"] = True
+            result["hs_company_name"] = props.get("name", "")
+            result["hs_cross_country"] = bool(props.get(HS_CROSS_COUNTRY_PROPERTY, ""))
+
+            deals = _get_deals_for_company(company_id, api_key) if company_id else []
+            info = classify_deal(deals)
+            result["lead_warmth"] = info["lead_warmth"]
+            result["pipeline"] = info["pipeline"]
+            result["deal_stage"] = info["deal_stage_label"]
+            result["is_won"] = info["is_won"]
+            result["is_in_pipeline"] = info["is_in_pipeline"]
+
+            if deals:
+                owner_id = deals[0].get("hubspot_owner_id", "")
+                result["deal_owner"] = _resolve_owner_name(owner_id, api_key)
+
+            return result
+        except Exception as exc:
+            log.error(f"HubSpot enrichment failed for {domain}: {exc}")
+            return {"idx": idx}
+
+    work_items = []
+    for idx, row in df.iterrows():
         domain = normalise_domain(row.get("domain", ""))
-        if not domain:
-            continue
+        if domain:
+            work_items.append((idx, domain))
 
-        company = _search_company_by_domain(domain, api_key)
-        if not company:
-            continue
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {
+            executor.submit(process_domain, idx, domain): (idx, domain)
+            for idx, domain in work_items
+        }
+        for future in as_completed(futures):
+            result = future.result()
+            idx = result["idx"]
+            for col in ["hs_exists", "hs_company_name", "pipeline", "deal_stage",
+                        "deal_owner", "hs_cross_country", "is_won", "is_in_pipeline",
+                        "lead_warmth"]:
+                if col in result:
+                    df.at[idx, col] = result[col]
 
-        props = company.get("properties", {})
-        company_id = company.get("id")
-
-        df.at[idx, "hs_exists"] = True
-        df.at[idx, "hs_company_name"] = props.get("name", "")
-        df.at[idx, "hs_cross_country"] = bool(
-            props.get(HS_CROSS_COUNTRY_PROPERTY, "")
-        )
-
-        # Get deals
-        deals = _get_deals_for_company(company_id, api_key) if company_id else []
-
-        # Classify
-        info = classify_deal(deals)
-        df.at[idx, "lead_warmth"] = info["lead_warmth"]
-        df.at[idx, "pipeline"] = info["pipeline"]
-        df.at[idx, "deal_stage"] = info["deal_stage_label"]
-        df.at[idx, "is_won"] = info["is_won"]
-        df.at[idx, "is_in_pipeline"] = info["is_in_pipeline"]
-
-        # Owner from best deal
-        if deals:
-            owner_id = deals[0].get("hubspot_owner_id", "")
-            df.at[idx, "deal_owner"] = _resolve_owner_name(owner_id, api_key)
-
-        if (i + 1) % 50 == 0:
-            log.info(f"HubSpot enrichment: {i+1}/{total}")
+            with lock:
+                counter["done"] += 1
+                if counter["done"] % 50 == 0:
+                    log.info(f"HubSpot enrichment: {counter['done']}/{total}")
 
     return df
