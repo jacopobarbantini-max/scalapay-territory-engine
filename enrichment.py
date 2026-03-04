@@ -1,13 +1,18 @@
 """
 enrichment.py - Checkout / Competitor / Ad-tech / Store Locator enrichment.
 
-Five enrichment vectors:
-  1. Multi-page scraping  -> homepage + checkout/cart/product pages
-  2. SERP-based lookup    -> fallback competitor intel via search
-  3. Ad pixel detection   -> Meta Pixel / Google Ads tags on homepage
-  4. Store locator        -> detect physical store presence
-  5. Meta tag / schema.org -> structured data extraction (JS-free turnaround)
+Enrichment pipeline (in order):
+  1. Homepage HTML + JS source analysis (script src, data-attrs, CSS classes)
+  2. Schema.org / JSON-LD structured data extraction
+  3. Product page discovery & scraping (BNPL widgets on product pages)
+  4. JS bundle analysis (download external .js files, search for BNPL strings)
+  5. Checkout/cart page scraping
+  6. Sitemap/robots.txt checkout URL discovery
+  7. DNS CNAME check (checkout.merchant.com → klarna.com)
+  8. Google Cache / Wayback Machine fallback
+  9. SERP fallback (requires API key)
 
+Anti-bot: Uses curl_cffi (Chrome TLS fingerprint) if available, falls back to requests.
 All scraping uses multithreading (10 workers) for ~10x speedup.
 Results cached 7 days to avoid duplicate requests.
 """
@@ -16,6 +21,7 @@ import hashlib
 import json
 import os
 import re
+import socket
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -23,13 +29,24 @@ from threading import Lock
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
-import requests
 from bs4 import BeautifulSoup
 
 from config import KNOWN_COMPETITORS, KNOWN_PSPS
 from utils import get_logger, normalise_domain
 
 log = get_logger(__name__)
+
+# ── HTTP CLIENT: curl_cffi (Cloudflare bypass) or requests fallback ──
+try:
+    from curl_cffi import requests as cffi_requests
+    _SESSION = cffi_requests.Session(impersonate="chrome120")
+    USE_CFFI = True
+    log.info("Using curl_cffi with Chrome TLS fingerprint (Cloudflare bypass enabled)")
+except ImportError:
+    import requests
+    _SESSION = requests.Session()
+    USE_CFFI = False
+    log.info("curl_cffi not available, using standard requests (some sites may block)")
 
 HEADERS = {
     "User-Agent": (
@@ -79,9 +96,12 @@ def _set_cache(domain, data):
 
 # ── FETCHING ────────────────────────────────────────────────
 def _fetch_page(url):
-    """Fetch a single URL, return HTML or None."""
+    """Fetch a single URL using curl_cffi (Cloudflare bypass) or requests."""
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=TIMEOUT, allow_redirects=True)
+        if USE_CFFI:
+            resp = _SESSION.get(url, timeout=TIMEOUT, allow_redirects=True)
+        else:
+            resp = _SESSION.get(url, headers=HEADERS, timeout=TIMEOUT, allow_redirects=True)
         if resp.status_code == 200:
             return resp.text
     except Exception:
@@ -514,7 +534,7 @@ def _fetch_via_cache_fallback(domain):
             f"https://web.archive.org/cdx/search/cdx?"
             f"url={domain}&output=json&limit=1&fl=timestamp&filter=statuscode:200"
         )
-        resp = requests.get(cdx_url, timeout=8)
+        resp = _SESSION.get(cdx_url, timeout=8)
         if resp.status_code == 200:
             data = resp.json()
             if len(data) > 1:  # first row is header
@@ -526,6 +546,101 @@ def _fetch_via_cache_fallback(domain):
     return None
 
 
+# ── TURNAROUND #4: JS Bundle Analysis ───────────────────────
+def _analyze_js_bundles(html, domain):
+    """
+    Download external .js files referenced in script tags and search
+    for BNPL strings inside them. The browser must download these files
+    to render the page, so they're never behind anti-bot protection.
+    
+    Cap at 5 JS files, max 200KB each to stay fast.
+    """
+    found = []
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        js_urls = []
+        base = f"https://{domain}"
+        for tag in soup.find_all("script", src=True):
+            src = tag["src"].strip()
+            # Make absolute
+            if src.startswith("//"):
+                src = "https:" + src
+            elif src.startswith("/"):
+                src = base + src
+            elif not src.startswith("http"):
+                src = base + "/" + src
+            # Only same domain or CDN (skip third-party analytics etc.)
+            if domain in src or "cdn" in src or "assets" in src or "static" in src:
+                js_urls.append(src)
+            if len(js_urls) >= 5:
+                break
+
+        for js_url in js_urls:
+            try:
+                if USE_CFFI:
+                    resp = _SESSION.get(js_url, timeout=8, allow_redirects=True)
+                else:
+                    resp = _SESSION.get(js_url, headers=HEADERS, timeout=8, allow_redirects=True)
+                if resp.status_code == 200:
+                    # Only read first 200KB
+                    js_text = resp.text[:200000].lower()
+                    for comp, pattern in COMPETITOR_PATTERNS.items():
+                        if pattern.search(js_text) and comp.title() not in found:
+                            found.append(comp.title())
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return found
+
+
+# ── TURNAROUND #5: DNS CNAME Check ─────────────────────────
+# Known BNPL checkout subdomains and CNAME targets
+BNPL_DNS_TARGETS = {
+    "klarna": ["klarna.com", "klarna.net", "klarnacdn.net"],
+    "alma": ["alma.eu", "getalma.eu"],
+    "sequra": ["sequra.com", "sequra.es"],
+    "afterpay": ["afterpay.com", "clearpay.co.uk", "clearpay.com"],
+    "oney": ["oney.com", "oney.fr", "oney.es"],
+    "cofidis": ["cofidis.com", "cofidis.fr", "cofidis.es"],
+}
+
+CHECKOUT_SUBDOMAINS = ["checkout", "pay", "payment", "pago", "secure"]
+
+
+def _dns_cname_check(domain):
+    """
+    Check if checkout.merchant.com (or pay.merchant.com etc.) has a
+    CNAME pointing to a BNPL provider. This is free, instant, and
+    impossible to block because it's DNS, not HTTP.
+    """
+    found = []
+    for sub in CHECKOUT_SUBDOMAINS:
+        fqdn = f"{sub}.{domain}"
+        try:
+            cname = socket.getfqdn(fqdn)
+            cname_lower = cname.lower()
+            for comp, targets in BNPL_DNS_TARGETS.items():
+                for target in targets:
+                    if target in cname_lower:
+                        found.append(comp.title())
+                        break
+        except Exception:
+            continue
+
+        # Also try direct A record resolution and reverse lookup
+        try:
+            addrs = socket.getaddrinfo(fqdn, 443, proto=socket.IPPROTO_TCP)
+            if addrs:
+                # The subdomain exists — even if we can't match CNAME,
+                # this is useful info (merchant has a checkout subdomain)
+                pass
+        except (socket.gaierror, OSError):
+            continue
+
+    return list(set(found))
+
+
 # ── SERP FALLBACK ───────────────────────────────────────────
 def _serp_competitor_check(domain):
     api_key = os.getenv("SERP_API_KEY", "").strip()
@@ -535,7 +650,10 @@ def _serp_competitor_check(domain):
     url = "https://serpapi.com/search"
     params = {"q": query, "api_key": api_key, "num": 5}
     try:
-        resp = requests.get(url, params=params, timeout=15)
+        if USE_CFFI:
+            resp = _SESSION.get(url, params=params, timeout=15)
+        else:
+            resp = _SESSION.get(url, params=params, headers=HEADERS, timeout=15)
         resp.raise_for_status()
         results_text = str(resp.json().get("organic_results", "")).lower()
         return [c.title() for c in KNOWN_COMPETITORS if c in results_text]
@@ -565,7 +683,7 @@ def enrich_single_domain(domain):
     meta_pixel = False
     google_ads = False
 
-    # Phase 1: Homepage
+    # Phase 1: Homepage + JS source analysis
     html = _fetch_homepage(domain)
     if html:
         bnpl, psp, meta, gads = detect_from_html(html)
@@ -578,8 +696,7 @@ def enrich_single_domain(domain):
         structured = _extract_structured_data(html)
         all_bnpl.extend(structured)
 
-    # Phase 2: Product pages (highest hit rate for BNPL detection)
-    # BNPL widgets show "Pay in 3 with Klarna" on product pages — static HTML
+    # Phase 2: Product pages (BNPL widgets on product pages)
     if not all_bnpl:
         product_html = _scrape_product_pages(domain, homepage_html=html)
         if product_html:
@@ -589,7 +706,12 @@ def enrich_single_domain(domain):
             meta_pixel = meta_pixel or meta
             google_ads = google_ads or gads
 
-    # Phase 3: Checkout/cart pages
+    # Phase 3: JS bundle analysis (download .js files, search BNPL strings)
+    if not all_bnpl and html:
+        js_found = _analyze_js_bundles(html, domain)
+        all_bnpl.extend(js_found)
+
+    # Phase 4: Checkout/cart pages
     if not all_bnpl:
         checkout_html = _fetch_checkout_pages(domain)
         if checkout_html:
@@ -599,7 +721,7 @@ def enrich_single_domain(domain):
             meta_pixel = meta_pixel or meta
             google_ads = google_ads or gads
 
-    # Phase 4: Sitemap/robots.txt checkout discovery
+    # Phase 5: Sitemap/robots.txt checkout discovery
     if not all_bnpl:
         checkout_urls = _find_checkout_from_sitemap(domain)
         for url in checkout_urls:
@@ -609,7 +731,12 @@ def enrich_single_domain(domain):
                 all_bnpl.extend(bnpl)
                 all_psp.extend(psp)
 
-    # Phase 5: Google Cache / Wayback fallback (if homepage blocked)
+    # Phase 6: DNS CNAME check (checkout.merchant.com → klarna.com)
+    if not all_bnpl:
+        dns_found = _dns_cname_check(domain)
+        all_bnpl.extend(dns_found)
+
+    # Phase 7: Google Cache / Wayback fallback (if homepage blocked)
     if not html and not all_bnpl:
         cached_html = _fetch_via_cache_fallback(domain)
         if cached_html:
@@ -619,7 +746,7 @@ def enrich_single_domain(domain):
             meta_pixel = meta_pixel or meta
             google_ads = google_ads or gads
 
-    # Phase 6: SERP fallback (last resort)
+    # Phase 8: SERP fallback (last resort)
     if not all_bnpl and not html:
         serp_comps = _serp_competitor_check(domain)
         all_bnpl.extend(serp_comps)
@@ -710,12 +837,14 @@ def detect_store_locator(domain):
     try:
         for proto in ("https://", "http://"):
             try:
-                resp = requests.get(
-                    f"{proto}{domain}",
-                    headers=HEADERS,
-                    timeout=8,
-                    allow_redirects=True,
-                )
+                if USE_CFFI:
+                    resp = _SESSION.get(
+                        f"{proto}{domain}", timeout=8, allow_redirects=True,
+                    )
+                else:
+                    resp = _SESSION.get(
+                        f"{proto}{domain}", headers=HEADERS, timeout=8, allow_redirects=True,
+                    )
                 if resp.status_code == 200:
                     html_lower = resp.text.lower()
                     for signal in STORE_LOCATOR_SIGNALS:

@@ -219,7 +219,7 @@ def classify_deal(deals: List[dict]) -> dict:
 
 
 # ── MAIN ENRICHMENT FUNCTION ────────────────────────────────
-def enrich_with_hubspot(df: pd.DataFrame) -> pd.DataFrame:
+def enrich_with_hubspot(df: pd.DataFrame, progress_callback=None) -> pd.DataFrame:
     """Add HubSpot columns to the leads DataFrame. Multithreaded."""
     api_key = _get_api_key()
 
@@ -300,5 +300,7 @@ def enrich_with_hubspot(df: pd.DataFrame) -> pd.DataFrame:
                 counter["done"] += 1
                 if counter["done"] % 50 == 0:
                     log.info(f"HubSpot enrichment: {counter['done']}/{total}")
+                if progress_callback:
+                    progress_callback(counter["done"], total)
 
     return df

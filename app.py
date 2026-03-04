@@ -1,12 +1,6 @@
 """
-app.py — Scalapay Territory List Generator
-
-Streamlit UI that orchestrates the full pipeline:
-  Phase 1: Ingest (Similarweb CSV / API) + HubSpot cross-check
-  Phase 2: Enrichment (competitor scraping, ad pixels)
-  Phase 3: Business logic & metrics
-  Phase 4: Tier assignment
-  Phase 5: Final scoring & Excel export
+app.py — Scalapay Territory Engine
+Premium UI with Scalapay Design System
 """
 
 import io
@@ -36,70 +30,366 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── CUSTOM CSS ──────────────────────────────────────────────
+# ── SCALAPAY DESIGN SYSTEM CSS ──────────────────────────────
 st.markdown("""
 <style>
-    .main-header {
-        color: #5666F0;
-        font-size: 2.4rem;
-        font-weight: 800;
-        margin-bottom: 0;
+    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap');
+
+    /* ─── GLOBAL ─── */
+    .stApp {
+        font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
     }
-    .sub-header {
-        color: #3A4045;
-        font-size: 1.05rem;
-        margin-top: -8px;
-        margin-bottom: 24px;
+    h1, h2, h3, h4, h5, h6, p, span, div, label {
+        font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif !important;
     }
-    .metric-card {
-        background: #FFFFFF;
-        border: 1px solid #e2e8f0;
-        border-radius: 16px;
-        padding: 20px;
-        text-align: center;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+
+    /* ─── SIDEBAR ─── */
+    section[data-testid="stSidebar"] {
+        background: #FDF5F3;
+        border-right: 1px solid #F0D5CE;
     }
-    .metric-value {
-        font-size: 2rem;
-        font-weight: 700;
-        color: #3A4045;
-    }
-    .metric-label {
-        color: #64748b;
-        font-size: 0.85rem;
+    section[data-testid="stSidebar"] .stMarkdown h3 {
+        font-size: 0.8rem;
+        font-weight: 600;
+        color: #8C939A;
         text-transform: uppercase;
-        letter-spacing: 0.05em;
+        letter-spacing: 0.08em;
+        margin-bottom: 4px;
     }
-    .tier-gold { color: #b45309; font-weight: 700; }
-    .tier-silver { color: #475569; font-weight: 700; }
-    .tier-bronze { color: #c2410c; font-weight: 700; }
-    div[data-testid="stDataFrame"] {
-        border: 1px solid #e2e8f0;
+
+    /* ─── HEADER COMPONENT ─── */
+    .te-header {
+        padding: 24px 0 20px 0;
+        border-bottom: 1px solid #F0D5CE;
+        margin-bottom: 28px;
+    }
+    .te-logo-row {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        margin-bottom: 6px;
+    }
+    .te-logo-badge {
+        background: linear-gradient(135deg, #EA5440 0%, #F27060 100%);
+        color: white;
+        font-weight: 700;
+        font-size: 0.7rem;
+        padding: 5px 10px;
+        border-radius: 8px;
+        letter-spacing: 0.03em;
+    }
+    .te-title {
+        font-size: 1.75rem;
+        font-weight: 700;
+        color: #1A1D21;
+        margin: 0;
+        line-height: 1.2;
+    }
+    .te-subtitle {
+        color: #8C939A;
+        font-size: 0.92rem;
+        margin: 4px 0 0 0;
+        font-weight: 400;
+    }
+
+    /* ─── SIDEBAR SECTIONS ─── */
+    .sidebar-section {
+        background: #FFFFFF;
+        border: 1px solid #F0D5CE;
         border-radius: 12px;
+        padding: 16px;
+        margin-bottom: 16px;
     }
-    .stButton > button[kind="primary"] {
-        background-color: #5666F0;
+    .sidebar-section-title {
+        font-size: 0.72rem;
+        font-weight: 600;
+        color: #8C939A;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-bottom: 12px;
+    }
+    .sidebar-divider {
         border: none;
+        border-top: 1px solid #F0D5CE;
+        margin: 20px 0;
+    }
+
+    /* ─── INTEGRATION HELP TOOLTIPS ─── */
+    .integration-item {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        padding: 10px 0;
+    }
+    .integration-icon {
+        width: 32px;
+        height: 32px;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1rem;
+        flex-shrink: 0;
+    }
+    .integration-icon-hs { background: #FFF4E5; }
+    .integration-icon-scrape { background: #EEF0FF; }
+    .integration-icon-ads { background: #F0FFF4; }
+    .integration-desc {
+        font-size: 0.78rem;
+        color: #6B7280;
+        line-height: 1.4;
+        margin-top: 2px;
+    }
+
+    /* ─── KPI METRIC CARDS ─── */
+    .kpi-card {
+        background: #FFFFFF;
+        border: 1px solid #F0D5CE;
+        border-radius: 14px;
+        padding: 22px 18px;
+        text-align: center;
+        transition: all 0.2s ease;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    }
+    .kpi-card:hover {
+        border-color: #EA5440;
+        box-shadow: 0 4px 12px rgba(234,84,64,0.10);
+        transform: translateY(-1px);
+    }
+    .kpi-value {
+        font-size: 1.8rem;
+        font-weight: 700;
+        color: #1A1D21;
+        line-height: 1.2;
+        margin-bottom: 4px;
+    }
+    .kpi-value-gold { color: #B45309; }
+    .kpi-value-coral { color: #EA5440; }
+    .kpi-value-green { color: #059669; }
+    .kpi-label {
+        color: #8C939A;
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        font-weight: 500;
+    }
+
+    /* ─── TIER BADGES ─── */
+    .tier-gold {
+        background: #FEF3C7;
+        color: #92400E;
+        font-weight: 600;
+        padding: 2px 10px;
+        border-radius: 20px;
+        font-size: 0.8rem;
+    }
+    .tier-silver {
+        background: #F1F5F9;
+        color: #475569;
+        font-weight: 600;
+        padding: 2px 10px;
+        border-radius: 20px;
+        font-size: 0.8rem;
+    }
+    .tier-bronze {
+        background: #FED7AA;
+        color: #9A3412;
+        font-weight: 600;
+        padding: 2px 10px;
+        border-radius: 20px;
+        font-size: 0.8rem;
+    }
+
+    /* ─── DATA TABLES ─── */
+    div[data-testid="stDataFrame"] {
+        border: 1px solid #F0D5CE;
         border-radius: 12px;
+        overflow: hidden;
+    }
+
+    /* ─── BUTTONS ─── */
+    .stButton > button[kind="primary"] {
+        background: linear-gradient(135deg, #EA5440 0%, #F06050 100%);
+        border: none;
+        border-radius: 10px;
+        font-weight: 600;
+        font-size: 0.9rem;
+        padding: 10px 24px;
+        transition: all 0.2s ease;
+        box-shadow: 0 2px 8px rgba(234,84,64,0.25);
+    }
+    .stButton > button[kind="primary"]:hover {
+        box-shadow: 0 4px 16px rgba(234,84,64,0.35);
+        transform: translateY(-1px);
+    }
+    .stButton > button[kind="secondary"] {
+        border-radius: 10px;
+        font-weight: 500;
+        border: 1px solid #F0D5CE;
+    }
+
+    /* ─── TABS ─── */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+        border-bottom: 1px solid #F0D5CE;
+    }
+    .stTabs [data-baseweb="tab"] {
+        border-radius: 8px 8px 0 0;
+        font-weight: 500;
+        font-size: 0.85rem;
+        padding: 8px 16px;
+    }
+    .stTabs [aria-selected="true"] {
+        border-bottom: 2px solid #EA5440 !important;
+        color: #EA5440;
+    }
+
+    /* ─── PROGRESS BAR ─── */
+    .stProgress > div > div > div > div {
+        background: linear-gradient(90deg, #EA5440, #F27060);
+        border-radius: 8px;
+    }
+
+    /* ─── PHASE HEADERS ─── */
+    .phase-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 0 6px 0;
+    }
+    .phase-number {
+        background: #EA5440;
+        color: white;
+        width: 26px;
+        height: 26px;
+        border-radius: 50%;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.75rem;
+        font-weight: 700;
+        flex-shrink: 0;
+    }
+    .phase-text {
+        font-size: 1rem;
+        font-weight: 600;
+        color: #1A1D21;
+    }
+
+    /* ─── LANDING STATE ─── */
+    .landing-container {
+        text-align: center;
+        padding: 80px 20px;
+    }
+    .landing-icon {
+        font-size: 3.5rem;
+        margin-bottom: 16px;
+        opacity: 0.9;
+    }
+    .landing-title {
+        font-size: 1.25rem;
+        font-weight: 600;
+        color: #1A1D21;
+        margin-bottom: 8px;
+    }
+    .landing-desc {
+        color: #8C939A;
+        font-size: 0.9rem;
+        max-width: 400px;
+        margin: 0 auto;
+        line-height: 1.5;
+    }
+
+    /* ─── FOOTER ─── */
+    .te-footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 16px 0;
+        border-top: 1px solid #F0D5CE;
+        margin-top: 32px;
+    }
+    .te-footer-left {
+        color: #8C939A;
+        font-size: 0.78rem;
+    }
+    .te-footer-logo {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        color: #8C939A;
+        font-size: 0.75rem;
+    }
+    .te-footer-logo .scalapay-heart {
+        color: #EA5440;
+        font-size: 0.85rem;
+    }
+
+    /* ─── EXPANDER ─── */
+    .streamlit-expanderHeader {
+        font-weight: 500;
+        font-size: 0.9rem;
+    }
+
+    /* ─── HIDE DEFAULT HEADER ─── */
+    header[data-testid="stHeader"] {
+        background: rgba(255,255,255,0.97);
+        backdrop-filter: blur(8px);
+    }
+
+    /* ─── SLIDER STYLING ─── */
+    .stSlider [data-baseweb="slider"] [role="slider"] {
+        background-color: #EA5440;
+    }
+    .stSlider [data-baseweb="slider"] div[data-testid="stTickBar"] > div {
+        background-color: #EA5440;
+    }
+
+    /* ─── CHECKBOX ─── */
+    .stCheckbox label span[data-testid="stCheckbox"] {
+        color: #1A1D21;
+    }
+
+    /* ─── ALERTS ─── */
+    .stAlert {
+        border-radius: 10px;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # ── HEADER ──────────────────────────────────────────────────
-st.markdown('<p class="main-header">🎯 Scalapay Territory Engine</p>', unsafe_allow_html=True)
-st.markdown('<p class="sub-header">Automated lead scoring & territory list generation for ES (Iberia) / FR Sales teams</p>', unsafe_allow_html=True)
+st.markdown("""
+<div class="te-header">
+    <div class="te-logo-row">
+        <span class="te-logo-badge">TERRITORY ENGINE</span>
+    </div>
+    <p class="te-title">Lead Scoring & Territory Builder</p>
+    <p class="te-subtitle">Automated pipeline for IB (Iberia) / FR (France) sales expansion</p>
+</div>
+""", unsafe_allow_html=True)
 
 # ── SIDEBAR — CONFIGURATION ────────────────────────────────
 with st.sidebar:
-    st.markdown("### ⚙️ Pipeline Configuration")
+    # Sidebar branding
+    st.markdown("""
+    <div style="display: flex; align-items: center; gap: 8px; padding: 4px 0 16px 0;">
+        <span style="color: #EA5440; font-size: 1.1rem;">♥</span>
+        <span style="font-weight: 600; font-size: 0.95rem; color: #3A4045;">scalapay</span>
+        <span style="color: #8C939A; font-size: 0.75rem; margin-left: auto;">Territory Engine</span>
+    </div>
+    """, unsafe_allow_html=True)
 
-    st.markdown("---")
-    st.markdown("**📊 Data Source**")
+    st.markdown('<hr class="sidebar-divider">', unsafe_allow_html=True)
+
+    # ── DATA SOURCE ──
+    st.markdown("### Data Source")
+
     data_mode = st.radio(
-        "Similarweb input mode",
-        ["📁 CSV Upload", "🌐 API (requires key)"],
+        "Input mode",
+        ["CSV Upload", "API"],
         index=0,
-        help="Upload a Similarweb export CSV, or use the API if you have a key.",
+        label_visibility="collapsed",
+        help="Upload a Similarweb export file, or connect via API if you have a key.",
     )
 
     territory_labels = {"IB": "IB (Iberia: ES + PT)", "FR": "FR (France)"}
@@ -112,12 +402,12 @@ with st.sidebar:
 
     uploaded_files = {}
     if "CSV" in data_mode:
-        st.markdown("---")
-        st.markdown("**📂 Upload Similarweb Exports**")
+        st.markdown('<hr class="sidebar-divider">', unsafe_allow_html=True)
+        st.markdown("### Upload Data")
         for c in countries:
             upload_label = "Iberia (ES+PT)" if c == "IB" else c
             f = st.file_uploader(
-                f"Similarweb CSV/XLSX — {upload_label}",
+                f"Similarweb — {upload_label}",
                 type=["csv", "xlsx", "xls"],
                 key=f"sw_upload_{c}",
             )
@@ -125,53 +415,62 @@ with st.sidebar:
                 uploaded_files[c] = f
 
         if not uploaded_files:
-            use_sample = st.checkbox("🧪 Use sample data for demo", value=True)
+            use_sample = st.checkbox("Use sample data for demo", value=True)
         else:
             use_sample = False
     else:
         use_sample = False
 
-    st.markdown("---")
-    st.markdown("**🔌 Integrations**")
+    # ── INTEGRATIONS ──
+    st.markdown('<hr class="sidebar-divider">', unsafe_allow_html=True)
+    st.markdown("### Integrations")
+
     enable_hubspot = st.checkbox(
-        "HubSpot CRM cross-check",
+        "HubSpot CRM",
         value=bool(os.getenv("HUBSPOT_API_KEY")),
-        help="Requires HUBSPOT_API_KEY in .env",
+        help="Cross-references every domain against your HubSpot CRM to find existing companies, active deals, and deal owners. Assigns a warmth label (Active Pipeline, In CRM No Deal, Net New, Lost 6m+ ago, Recently Lost, Existing Client) that feeds into the lead score.",
     )
+    st.markdown('<p style="font-size:0.75rem; color:#8C939A; margin-top:-10px; margin-bottom:12px;">Matches leads to CRM records, deal stages, and owners. Determines lead warmth for scoring.</p>', unsafe_allow_html=True)
+
     enable_scraping = st.checkbox(
-        "Checkout / competitor scraping",
+        "Competitor Detection",
         value=False,
-        help="Scrapes merchant homepages — slower but richer data.",
+        help="Scrapes merchant websites (homepage, product pages, checkout paths, JS bundles) to detect BNPL competitors like Klarna, Alma, Sequra, and Oney. Also checks structured data, sitemaps, and DNS records. Uses 9 detection layers for ~75% coverage. Enables the whitespace score component.",
     )
+    st.markdown('<p style="font-size:0.75rem; color:#8C939A; margin-top:-10px; margin-bottom:12px;">Detects Klarna, Alma, Sequra & 11 more BNPL providers across 9 scraping layers. Feeds whitespace scoring.</p>', unsafe_allow_html=True)
+
     enable_ads_check = st.checkbox(
-        "Ad pixel detection",
+        "Ad Pixel Detection",
         value=False,
-        help="Detects Meta Pixel & Google Ads tags (requires scraping).",
+        help="Detects Meta (Facebook) Pixel and Google Ads conversion tags on merchant homepages. Merchants with active ad pixels are investing in customer acquisition — a signal they have budget and need checkout optimization. Requires competitor detection to be enabled.",
     )
+    st.markdown('<p style="font-size:0.75rem; color:#8C939A; margin-top:-10px; margin-bottom:12px;">Finds Meta Pixel & Google Ads tags. Signals ad spend = budget for checkout optimization.</p>', unsafe_allow_html=True)
 
-    st.markdown("---")
-    st.markdown("**🎚️ Scoring Weights**")
-    w_tier = st.slider("Tier weight", 0.0, 0.5, SCORING_WEIGHTS["tier"], 0.05,
-        help="Industry fit for BNPL. How well does pay-later convert in this vertical? Gold (Apparel, Beauty, Electronics) scores highest, Bronze (Travel, Food) lowest.")
-    w_pen = st.slider("Penetration/TTV weight", 0.0, 0.5, SCORING_WEIGHTS["penetration_ttv"], 0.05,
-        help="Revenue opportunity. Combines BNPL penetration rate in the vertical with estimated Total Transaction Value (traffic x conversion x AOV x Scalapay share).")
-    w_growth = st.slider("Growth weight", 0.0, 0.5, SCORING_WEIGHTS["traffic_growth"], 0.05,
-        help="Merchant momentum. YoY + MoM traffic growth from Similarweb. Proxy for ad spend: merchants investing in acquisition have budget and need checkout optimization.")
-    w_warmth = st.slider("Lead warmth weight", 0.0, 0.5, SCORING_WEIGHTS["lead_warmth"], 0.05,
-        help="CRM status from HubSpot. Active Pipeline = 10, In CRM No Deal = 7, Net New = 5, Lost 6m+ ago = 4, Recently Lost = 3, Existing Client = 2. Without HubSpot, all leads = Net New.")
-    w_ws = st.slider("Whitespace weight", 0.0, 0.5, SCORING_WEIGHTS["whitespace"], 0.05,
-        help="Greenfield flag. True if no real BNPL competitor detected on merchant site. PayPal BNPL alone still counts as whitespace. Requires scraping enabled.")
+    # ── SCORING WEIGHTS ──
+    st.markdown('<hr class="sidebar-divider">', unsafe_allow_html=True)
+    st.markdown("### Scoring Weights")
+    st.markdown('<p style="font-size:0.75rem; color:#8C939A; margin-bottom:8px;">Adjust how each component contributes to the final priority score (0–100).</p>', unsafe_allow_html=True)
 
-    st.markdown("---")
-    st.markdown("**📋 Filters**")
-    min_traffic = st.number_input("Min monthly traffic", value=0, step=50_000)
+    w_tier = st.slider("Industry Tier", 0.0, 0.5, SCORING_WEIGHTS["tier"], 0.05,
+        help="How well does BNPL convert in this vertical? Gold verticals (Apparel, Beauty, Pharma) have highest contribution margins. Mapped per country from Scalapay internal data.")
+    w_pen = st.slider("Penetration / TTV", 0.0, 0.5, SCORING_WEIGHTS["penetration_ttv"], 0.05,
+        help="Revenue opportunity. Combines the BNPL penetration rate for this vertical (from Scalapay data) with estimated annual transaction value based on traffic × conversion × AOV × Scalapay share.")
+    w_growth = st.slider("Traffic Growth", 0.0, 0.5, SCORING_WEIGHTS["traffic_growth"], 0.05,
+        help="Merchant momentum. Blends YoY growth (60% weight, structural) with MoM growth (40%, recent trend). Proxy for ad spend: growing merchants invest in acquisition and need checkout optimization.")
+    w_warmth = st.slider("Lead Warmth", 0.0, 0.5, SCORING_WEIGHTS["lead_warmth"], 0.05,
+        help="CRM status from HubSpot. Active Pipeline scores highest (10), then In CRM No Deal (7), Net New (5), Lost 6m+ ago (4), Recently Lost (3), Existing Client (2). Without HubSpot enabled, all leads default to Net New.")
+    w_ws = st.slider("Whitespace", 0.0, 0.5, SCORING_WEIGHTS["whitespace"], 0.05,
+        help="Greenfield opportunity. Scores 10/10 if zero real BNPL competitors are detected on the merchant site. PayPal BNPL alone still counts as whitespace (8/10). Requires competitor detection enabled.")
+
+    # ── FILTERS ──
+    st.markdown('<hr class="sidebar-divider">', unsafe_allow_html=True)
+    st.markdown("### Filters")
+    min_traffic = st.number_input("Minimum monthly traffic", value=0, step=50_000)
     exclude_won = st.checkbox("Exclude Existing Clients", value=True)
 
 
 # ── MAIN PIPELINE ───────────────────────────────────────────
 def load_sample_data(country: str) -> pd.DataFrame:
-    """Load built-in sample data."""
-    # IB uses the ES sample (which already contains SP+PT merged data)
     file_code = "es" if country == "IB" else country.lower()
     path = f"sample_data/similarweb_sample_{file_code}.csv"
     try:
@@ -185,11 +484,14 @@ def load_sample_data(country: str) -> pd.DataFrame:
 
 
 def run_pipeline():
-    """Execute the full territory list generation pipeline."""
-
-    # ── PHASE 1: DATA INGESTION ─────────────────────────────
-    st.markdown("### 📥 Phase 1 — Data Ingestion & CRM Cross-Check")
-    progress = st.progress(0, text="Loading data...")
+    # ── PHASE 1: DATA INGESTION ──
+    st.markdown("""
+    <div class="phase-header">
+        <span class="phase-number">1</span>
+        <span class="phase-text">Data Ingestion & CRM Cross-Check</span>
+    </div>
+    """, unsafe_allow_html=True)
+    progress = st.progress(0, text=f"📂 Loading data — 0/{len(countries)} territories...")
 
     all_dfs = []
     for i, country in enumerate(countries):
@@ -202,20 +504,17 @@ def run_pipeline():
 
         if not df.empty:
             all_dfs.append(df)
-            st.success(f"✅ {country}: {len(df)} leads loaded")
-        else:
-            st.warning(f"⚠️ {country}: No data — upload a CSV or configure API key")
 
-        progress.progress((i + 1) / len(countries), text=f"Loaded {country}")
+        progress.progress((i + 1) / len(countries), text=f"📂 Loading data — {i+1}/{len(countries)} territories loaded")
 
     if not all_dfs:
         st.error("No data to process. Upload CSVs or enable sample data.")
         return None
 
     df = pd.concat(all_dfs, ignore_index=True)
-    st.info(f"📊 **{len(df)} total leads** across {', '.join(countries)}")
+    total_leads = len(df)
+    progress.progress(1.0, text=f"✓ Data loaded — {total_leads} leads across {', '.join(countries)}")
 
-    # Filter by minimum traffic
     traffic_col = "monthly_traffic" if "monthly_traffic" in df.columns else None
     if traffic_col:
         before = len(df)
@@ -224,12 +523,17 @@ def run_pipeline():
         if filtered > 0:
             st.caption(f"Filtered out {filtered} leads below {min_traffic:,} monthly traffic")
 
-    # ── HubSpot Cross-Check
     if enable_hubspot:
-        with st.spinner("🔄 Checking HubSpot CRM..."):
-            df = enrich_with_hubspot(df)
-            hs_found = df["hs_exists"].sum() if "hs_exists" in df.columns else 0
-            st.success(f"✅ HubSpot: {hs_found} existing records found")
+        total_leads = len(df)
+        hs_progress = st.progress(0, text=f"🔍 HubSpot CRM — checking 0/{total_leads} domains...")
+
+        def update_hs(current, total):
+            pct = current / total if total > 0 else 1
+            hs_progress.progress(pct, text=f"🔍 HubSpot CRM — {current}/{total} domains checked")
+
+        df = enrich_with_hubspot(df, progress_callback=update_hs)
+        hs_found = df["hs_exists"].sum() if "hs_exists" in df.columns else 0
+        hs_progress.progress(1.0, text=f"✓ HubSpot CRM — {hs_found}/{total_leads} records matched")
     else:
         df["hs_exists"] = False
         df["hs_company_name"] = ""
@@ -243,46 +547,55 @@ def run_pipeline():
 
     progress.progress(1.0, text="Phase 1 complete")
 
-    # ── PHASE 2: ENRICHMENT ─────────────────────────────────
-    st.markdown("### 🔍 Phase 2 — Competitor & Ad Enrichment")
+    # ── PHASE 2: ENRICHMENT ──
+    st.markdown("""
+    <div class="phase-header">
+        <span class="phase-number">2</span>
+        <span class="phase-text">Competitor & Ad Enrichment</span>
+    </div>
+    """, unsafe_allow_html=True)
 
     if enable_scraping:
-        enrich_progress = st.progress(0, text="Scraping merchant sites...")
+        total_leads = len(df)
+        enrich_progress = st.progress(0, text=f"🌐 Competitor Detection — scanning 0/{total_leads} sites...")
 
         def update_enrich(current, total):
-            enrich_progress.progress(
-                current / total,
-                text=f"Enriching {current}/{total} domains..."
-            )
+            pct = current / total if total > 0 else 1
+            enrich_progress.progress(pct, text=f"🌐 Competitor Detection — {current}/{total} sites scanned")
 
         df = enrich_dataframe(df, enable_scraping=True, progress_callback=update_enrich)
-        enrich_progress.progress(1.0, text="Enrichment complete")
         comps_found = (df["competitors_bnpl"] != "").sum()
-        st.success(f"✅ Competitor data found for {comps_found} merchants")
+        enrich_progress.progress(1.0, text=f"✓ Competitor Detection — BNPL found on {comps_found}/{total_leads} sites")
     else:
         df = enrich_dataframe(df, enable_scraping=False)
-        st.info("ℹ️ Scraping disabled — competitor columns left empty (enable in sidebar)")
+        st.info("Competitor detection disabled — enable in sidebar for whitespace scoring")
 
-    # ── PHASE 3 + 4 + 5: SCORING ───────────────────────────
-    st.markdown("### 🧮 Phase 3–5 — Scoring & Tier Assignment")
-    with st.spinner("Computing scores..."):
-        df = score_dataframe(df)
+    # ── PHASE 3-5: SCORING ──
+    st.markdown("""
+    <div class="phase-header">
+        <span class="phase-number">3</span>
+        <span class="phase-text">Scoring & Tier Assignment</span>
+    </div>
+    """, unsafe_allow_html=True)
+    score_progress = st.progress(0, text="🧮 Computing scores...")
+    score_progress.progress(0.3, text=f"🧮 Assigning tiers to {len(df)} leads...")
+    df = score_dataframe(df)
+    score_progress.progress(0.8, text="🧮 Applying filters...")
 
-    # Exclude won deals if requested
     if exclude_won and "lead_warmth" in df.columns:
         df = df[df["lead_warmth"] != "Existing Client"].reset_index(drop=True)
 
-    st.success(f"✅ **{len(df)} scored leads** ready for review")
+    score_progress.progress(1.0, text=f"✓ Scoring complete — {len(df)} leads ready")
     return df
 
 
 # ── GENERATE BUTTON ─────────────────────────────────────────
 col_btn1, col_btn2, _ = st.columns([1, 1, 3])
 with col_btn1:
-    generate = st.button("🚀 Generate Territory List", type="primary", use_container_width=True)
+    generate = st.button("Generate Territory List", type="primary", use_container_width=True)
 with col_btn2:
     if "result_df" in st.session_state and st.session_state.result_df is not None:
-        clear = st.button("🗑️ Clear Results", use_container_width=True)
+        clear = st.button("Clear Results", use_container_width=True)
         if clear:
             st.session_state.result_df = None
             st.rerun()
@@ -292,19 +605,16 @@ if generate:
     if result is not None:
         st.session_state.result_df = result
 
-        # ── AUTO-SAVE to exports/ folder ────────────────────────
         try:
-            import os, pathlib
+            import pathlib
             exports_dir = pathlib.Path(os.path.dirname(os.path.abspath(__file__))) / "exports"
             exports_dir.mkdir(exist_ok=True)
             ts = datetime.now().strftime("%Y%m%d_%H%M")
-            # Save Excel
             excel_path = exports_dir / f"territory_{ts}.xlsx"
             result.to_excel(str(excel_path), index=False, engine="xlsxwriter")
-            # Save CSV backup
             csv_path = exports_dir / f"territory_{ts}.csv"
             result.to_csv(str(csv_path), index=False)
-            st.success(f"Auto-saved to `exports/territory_{ts}.xlsx` and `.csv`")
+            st.success(f"Auto-saved to `exports/territory_{ts}.xlsx`")
         except Exception as e:
             st.warning(f"Auto-save failed: {e}")
 
@@ -312,12 +622,9 @@ if generate:
 if "result_df" in st.session_state and st.session_state.result_df is not None:
     df = st.session_state.result_df
 
-    st.markdown("---")
-    st.markdown("---")
-    st.markdown("### 📊 Results Dashboard")
+    st.markdown('<hr style="border:none; border-top:1px solid #F0D5CE; margin: 28px 0;">', unsafe_allow_html=True)
 
     def render_kpi_cards(data):
-        """Render KPI summary cards for any data subset."""
         k1, k2, k3, k4, k5 = st.columns(5)
         n_leads = len(data)
         gold_n = (data["tier"] == "GOLD").sum() if "tier" in data.columns else 0
@@ -326,27 +633,25 @@ if "result_df" in st.session_state and st.session_state.result_df is not None:
         ttv_str = f"€{ttv/1_000_000:.1f}M" if ttv >= 1_000_000 else f"€{ttv:,.0f}"
         ws_n = data["is_whitespace"].sum() if "is_whitespace" in data.columns else 0
         with k1:
-            st.markdown(f'<div class="metric-card"><div class="metric-value">{n_leads}</div><div class="metric-label">Total Leads</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="kpi-card"><div class="kpi-value">{n_leads}</div><div class="kpi-label">Total Leads</div></div>', unsafe_allow_html=True)
         with k2:
-            st.markdown(f'<div class="metric-card"><div class="metric-value tier-gold">{gold_n}</div><div class="metric-label">Gold Tier</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="kpi-card"><div class="kpi-value kpi-value-gold">{gold_n}</div><div class="kpi-label">Gold Tier</div></div>', unsafe_allow_html=True)
         with k3:
-            st.markdown(f'<div class="metric-card"><div class="metric-value">{avg_s:.1f}</div><div class="metric-label">Avg Score</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="kpi-card"><div class="kpi-value kpi-value-coral">{avg_s:.1f}</div><div class="kpi-label">Avg Score</div></div>', unsafe_allow_html=True)
         with k4:
-            st.markdown(f'<div class="metric-card"><div class="metric-value">{ttv_str}</div><div class="metric-label">Total Est. TTV</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="kpi-card"><div class="kpi-value kpi-value-green">{ttv_str}</div><div class="kpi-label">Est. TTV</div></div>', unsafe_allow_html=True)
         with k5:
-            st.markdown(f'<div class="metric-card"><div class="metric-value">{ws_n}</div><div class="metric-label">Whitespace Opps</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="kpi-card"><div class="kpi-value kpi-value-coral">{ws_n}</div><div class="kpi-label">Whitespace</div></div>', unsafe_allow_html=True)
 
     # ── Tabs
     tab_full, tab_gold, tab_whitespace, tab_country = st.tabs([
-        "📋 Full List", "🥇 Gold Tier", "🔵 Whitespace", "🌍 By Country"
+        "Full List", "Gold Tier", "Whitespace", "By Country"
     ])
 
-    # Define display columns
     display_cols = [
         "domain", "country", "tier", "scalapay_category", "segment", "Sales_Priority_Score",
         "lead_warmth", "est_ttv_annual_eur", "est_mr_annual_eur",
     ]
-    # Add optional columns if they exist
     for col in ["category", "industry", "monthly_traffic", "annual_revenue_bucket",
                  "employees_bucket", "yoy_growth", "mom_growth", "email",
                  "competitors_bnpl", "competitors_count", "psp_detected",
@@ -398,34 +703,32 @@ if "result_df" in st.session_state and st.session_state.result_df is not None:
         if "is_whitespace" in df.columns:
             ws_df = df[df["is_whitespace"] == True]
             if ws_df.empty:
-                st.info("No whitespace opportunities found with current data.")
+                st.info("No whitespace opportunities found. Enable competitor detection for whitespace scoring.")
             else:
                 render_kpi_cards(ws_df)
                 st.markdown("")
                 st.dataframe(ws_df[display_cols], use_container_width=True, height=400)
         else:
-            st.info("Whitespace column not available.")
+            st.info("Enable competitor detection in the sidebar to see whitespace opportunities.")
 
     with tab_country:
         for country in countries:
             if "country" in df.columns:
                 cdf = df[df["country"] == country]
-                st.markdown(f"#### \U0001f1ea\U0001f1f8\U0001f1f5\U0001f1f9 Iberia (ES + PT)" if country == "IB" else f"#### \U0001f1eb\U0001f1f7 France")
+                label = "🇪🇸🇵🇹 Iberia (ES + PT)" if country == "IB" else "🇫🇷 France"
+                st.markdown(f"#### {label}")
                 render_kpi_cards(cdf)
                 st.markdown("")
                 st.dataframe(cdf[display_cols], use_container_width=True, height=400)
 
-    # ── EXCEL EXPORT ────────────────────────────────────────
-    st.markdown("---")
-    st.markdown("### 📥 Export")
+    # ── EXCEL EXPORT ──
+    st.markdown('<hr style="border:none; border-top:1px solid #F0D5CE; margin: 28px 0;">', unsafe_allow_html=True)
 
     def generate_excel(dataframe: pd.DataFrame) -> bytes:
-        """Generate a formatted Excel file optimized for Google Sheets / sales."""
         output = io.BytesIO()
 
-        # Reorder columns for sales readability
         priority_cols = [
-            "domain", "country", "tier", "segment", "Sales_Priority_Score",
+            "domain", "country", "tier", "scalapay_category", "segment", "Sales_Priority_Score",
             "pipeline", "deal_stage", "deal_owner", "is_won", "is_in_pipeline",
             "lead_warmth", "channel_type",
             "est_ttv_annual_eur", "est_mr_annual_eur",
@@ -446,11 +749,11 @@ if "result_df" in st.session_state and st.session_state.result_df is not None:
             ws = writer.sheets["Territory List"]
 
             header_fmt = wb.add_format({
-                "bold": True, "bg_color": "#1e1b4b", "font_color": "#e2e8f0",
+                "bold": True, "bg_color": "#EA5440", "font_color": "#FFFFFF",
                 "border": 1, "text_wrap": True, "valign": "vcenter",
                 "font_name": "Arial", "font_size": 10,
             })
-            money_fmt = wb.add_format({"num_format": '#,##0 \u20ac', "font_name": "Arial", "font_size": 10})
+            money_fmt = wb.add_format({"num_format": '#,##0 €', "font_name": "Arial", "font_size": 10})
             number_fmt = wb.add_format({"num_format": "#,##0", "font_name": "Arial", "font_size": 10})
             pct_fmt = wb.add_format({"num_format": "0.0%", "font_name": "Arial", "font_size": 10})
             score_fmt = wb.add_format({"num_format": "0.0", "bold": True, "font_name": "Arial", "font_size": 10})
@@ -522,7 +825,7 @@ if "result_df" in st.session_state and st.session_state.result_df is not None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M")
         excel_bytes = generate_excel(df)
         st.download_button(
-            label="⬇️ Download Full Excel Report",
+            label="Download Excel Report",
             data=excel_bytes,
             file_name=f"scalapay_territory_list_{timestamp}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -532,46 +835,48 @@ if "result_df" in st.session_state and st.session_state.result_df is not None:
     with col_dl2:
         csv_bytes = df.to_csv(index=False).encode("utf-8")
         st.download_button(
-            label="⬇️ Download CSV",
+            label="Download CSV",
             data=csv_bytes,
             file_name=f"scalapay_territory_list_{timestamp}.csv",
             mime="text/csv",
             use_container_width=True,
         )
 
-    # ── Score Breakdown (expandable)
-    with st.expander("🔬 Score Breakdown & Methodology"):
+    # ── Score Breakdown
+    with st.expander("Score Breakdown & Methodology"):
         st.markdown("""
-        **Sales_Priority_Score** is a composite 0–100 score built from:
+        **Sales Priority Score** is a composite 0–100 score built from five weighted components:
 
         | Component | Max pts | What it measures |
         |-----------|---------|------------------|
-        | **Tier** | 25 | Gold/Silver/Bronze category risk mapping |
-        | **Penetration / TTV** | 20 | BNPL adoption potential × estimated revenue |
-        | **Traffic Growth** | 15 | YoY (60%) + MoM (40%) e-commerce momentum |
-        | **Lead Warmth** | 15 | CRM status: Warm > Net New > Cold/Lost |
-        | **Competitor Intel** | 15 | Fewer active BNPL = bigger opportunity |
-        | **Whitespace** | 10 | Under-penetrated vertical with no competitors |
+        | **Industry Tier** | 25 | BNPL conversion fit by vertical and country. Gold = highest margin. |
+        | **Penetration / TTV** | 20 | Revenue potential: BNPL penetration × estimated transaction value. |
+        | **Traffic Growth** | 20 | YoY (60%) + MoM (40%) momentum. Proxy for merchant ad investment. |
+        | **Lead Warmth** | 15 | CRM status from HubSpot: Active Pipeline → Net New → Lost. |
+        | **Whitespace** | 20 | No BNPL competitor detected = greenfield opportunity. |
 
-        Weights are adjustable in the sidebar. Tier mapping follows the
-        Scalapay Risk/Profitability framework (Gold → highest priority).
+        Weights are adjustable in the sidebar. Formula: (raw points / 95) × 100.
         """)
 
 else:
     # Landing state
-    st.markdown("---")
     st.markdown("""
-    <div style="text-align: center; padding: 60px 20px; color: #64748b;">
-        <p style="font-size: 3rem; margin-bottom: 8px;">🎯</p>
-        <p style="font-size: 1.2rem; font-weight: 600; color: #475569;">
-            Upload Similarweb data & hit Generate
-        </p>
-        <p style="font-size: 0.9rem;">
-            Configure integrations in the sidebar, or use sample data for a quick demo.
+    <div class="landing-container">
+        <div class="landing-icon">🎯</div>
+        <p class="landing-title">Upload Similarweb data & hit Generate</p>
+        <p class="landing-desc">
+            Configure integrations and scoring weights in the sidebar,
+            or check "Use sample data" for a quick demo.
         </p>
     </div>
     """, unsafe_allow_html=True)
 
-# ── Footer
-st.markdown("---")
-st.caption("Scalapay Territory Engine v1.0 — RevOps & Strategy · Built for IB/FR Sales Expansion")
+# ── Footer ──
+st.markdown("""
+<div class="te-footer">
+    <div class="te-footer-left">Territory Engine v2.0 — RevOps & Strategy</div>
+    <div class="te-footer-logo">
+        Built with <span class="scalapay-heart">♥</span> <strong>scalapay</strong>
+    </div>
+</div>
+""", unsafe_allow_html=True)
