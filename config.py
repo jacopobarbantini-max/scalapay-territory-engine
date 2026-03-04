@@ -8,8 +8,19 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Support both .env (local) and Streamlit secrets (cloud)
+def _get_secret(key, default=""):
+    val = os.getenv(key, "")
+    if not val:
+        try:
+            import streamlit as st
+            val = st.secrets.get(key, default)
+        except Exception:
+            val = default
+    return val
+
 # ── API KEYS ────────────────────────────────────────────────
-HUBSPOT_TOKEN = os.getenv("HUBSPOT_API_KEY", "")
+HUBSPOT_TOKEN = _get_secret("HUBSPOT_API_KEY")
 HUBSPOT_BASE_URL = "https://api.hubapi.com"
 
 # ── COUNTRY CONFIGURATIONS ──────────────────────────────────
@@ -259,6 +270,25 @@ TIER_BY_COUNTRY = {
         "B2B Goods & Trade Materials": "SILVER",
         "Electronics & Household appliance": "BRONZE",
     },
+    "IT": {
+        "Jewelry & Watches": "BRONZE", "Electronics": "BRONZE",
+        "Pharma": "GOLD", "Dental": "GOLD", "Petcare": "GOLD",
+        "B2B": "SILVER", "Cosmetics & Beauty": "GOLD",
+        "Apparel & Fashion": "GOLD", "Shoes & Accessories": "GOLD",
+        "Wellness": "GOLD", "Food & Beverage": "GOLD",
+        "Glasses & Eyewear": "SILVER", "Other": "SILVER",
+        "Medical": "GOLD", "Sport": "GOLD",
+        "Generalist Marketplace": "GOLD", "General Retail": "GOLD",
+        "Professional Services": "GOLD", "Education": "GOLD",
+        "Baby & Toddler": "SILVER", "Home & Garden": "SILVER",
+        "Auto & Moto": "BRONZE", "Luxury Goods": "GOLD",
+        "Auto Repair Shops": "BRONZE", "Household Appliance": "SILVER",
+        "Travel": "SILVER", "Learning & Classes": "GOLD",
+        "Hobbies & Games": "SILVER", "Veterinarians": "SILVER",
+        "Entertainment & Sports": "SILVER", "Household Appliances": "SILVER",
+        "B2B Goods & Trade Materials": "SILVER",
+        "Electronics & Household appliance": "BRONZE",
+    },
 }
 
 # Category mapping: Similarweb industry -> Scalapay internal category
@@ -415,6 +445,15 @@ BNPL_PENETRATION_BY_COUNTRY = {
         "Electronics & Household appliance": 6.5, "Jewelry & Watches": 7.3,
         "Baby & Toddler": 6.1, "B2B": 6.4, "Auto & Moto": 6.7,
         "Generalist Marketplace": 3.0,
+    },
+    "IT": {  # Italy — Scalapay home market, higher BNPL penetration
+        "Home & Garden": 6.2, "Apparel & Fashion": 10.5, "Health & Wellness": 6.0,
+        "Learning & Classes": 13.0, "Hobbies & Games": 5.8, "Food & Beverage": 4.8,
+        "Other": 5.8, "Travel": 5.5, "Luxury Goods": 8.5, "Sport": 7.2,
+        "Cosmetics & Beauty": 9.0, "Shoes & Accessories": 10.2, "Petcare": 5.5,
+        "Electronics & Household appliance": 7.5, "Jewelry & Watches": 8.0,
+        "Baby & Toddler": 6.5, "B2B": 5.0, "Auto & Moto": 7.0,
+        "Generalist Marketplace": 4.0,
     },
 }
 

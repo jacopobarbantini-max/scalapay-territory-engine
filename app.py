@@ -335,7 +335,7 @@ st.markdown("""
         <span class="te-logo-badge">TERRITORY ENGINE</span>
     </div>
     <p class="te-title">Lead Scoring & Territory Builder</p>
-    <p class="te-subtitle">Automated pipeline for IB (Iberia) / FR (France) sales expansion</p>
+    <p class="te-subtitle">Automated pipeline for IB (Iberia) / FR (France) / IT (Italy) sales expansion</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -363,10 +363,10 @@ with st.sidebar:
         help="Upload a Similarweb export file, or connect via API if you have a key.",
     )
 
-    territory_labels = {"IB": "IB (Iberia: ES + PT)", "FR": "FR (France)"}
+    territory_labels = {"IB": "IB (Iberia: ES + PT)", "FR": "FR (France)", "IT": "IT (Italy)"}
     countries = st.multiselect(
         "Target territories",
-        ["IB", "FR"],
+        ["IB", "FR", "IT"],
         default=["IB", "FR"],
         format_func=lambda x: territory_labels[x],
     )
@@ -376,7 +376,7 @@ with st.sidebar:
         st.markdown('<hr class="sidebar-divider">', unsafe_allow_html=True)
         st.markdown("### Upload Data")
         for c in countries:
-            upload_label = "Iberia (ES+PT)" if c == "IB" else c
+            upload_label = {"IB": "Iberia (ES+PT)", "FR": "France", "IT": "Italy"}.get(c, c)
             f = st.file_uploader(
                 f"Similarweb — {upload_label}",
                 type=["csv", "xlsx", "xls"],
@@ -456,7 +456,7 @@ with st.sidebar:
 
 # ── MAIN PIPELINE ───────────────────────────────────────────
 def load_sample_data(country: str) -> pd.DataFrame:
-    file_code = "es" if country == "IB" else country.lower()
+    file_code = {"IB": "es", "FR": "fr", "IT": "it"}.get(country, country.lower())
     path = f"sample_data/similarweb_sample_{file_code}.csv"
     try:
         df = pd.read_csv(path)
@@ -700,7 +700,7 @@ if "result_df" in st.session_state and st.session_state.result_df is not None:
         for country in countries:
             if "country" in df.columns:
                 cdf = df[df["country"] == country]
-                label = "🇪🇸🇵🇹 Iberia (ES + PT)" if country == "IB" else "🇫🇷 France"
+                label = {"IB": "🇪🇸🇵🇹 Iberia (ES + PT)", "FR": "🇫🇷 France", "IT": "🇮🇹 Italy"}.get(country, country)
                 st.markdown(f"#### {label}")
                 render_kpi_cards(cdf)
                 st.markdown("")
@@ -799,7 +799,7 @@ if "result_df" in st.session_state and st.session_state.result_df is not None:
 
             if "country" in dataframe.columns:
                 for c in dataframe["country"].unique():
-                    label = "Iberia" if c == "IB" else c
+                    label = {"IB": "Iberia", "FR": "FR", "IT": "IT"}.get(c, c)
                     write_sub(dataframe[dataframe["country"] == c], f"Territory {label}"[:31])
 
         output.seek(0)
