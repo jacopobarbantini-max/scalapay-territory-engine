@@ -40,30 +40,29 @@ st.set_page_config(
 st.markdown("""
 <style>
     .main-header {
-        background: linear-gradient(135deg, #6C3AED 0%, #2563EB 50%, #0EA5E9 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
+        color: #5666F0;
         font-size: 2.4rem;
         font-weight: 800;
         margin-bottom: 0;
     }
     .sub-header {
-        color: #64748b;
+        color: #3A4045;
         font-size: 1.05rem;
         margin-top: -8px;
         margin-bottom: 24px;
     }
     .metric-card {
-        background: linear-gradient(135deg, #f8fafc 0%, #eef2ff 100%);
+        background: #FFFFFF;
         border: 1px solid #e2e8f0;
-        border-radius: 12px;
+        border-radius: 16px;
         padding: 20px;
         text-align: center;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.06);
     }
     .metric-value {
         font-size: 2rem;
         font-weight: 700;
-        color: #1e293b;
+        color: #3A4045;
     }
     .metric-label {
         color: #64748b;
@@ -76,7 +75,12 @@ st.markdown("""
     .tier-bronze { color: #c2410c; font-weight: 700; }
     div[data-testid="stDataFrame"] {
         border: 1px solid #e2e8f0;
-        border-radius: 8px;
+        border-radius: 12px;
+    }
+    .stButton > button[kind="primary"] {
+        background-color: #5666F0;
+        border: none;
+        border-radius: 12px;
     }
 </style>
 """, unsafe_allow_html=True)
