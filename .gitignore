@@ -1,1 +1,16 @@
-.env 
+# Environment
+.env
+__pycache__/
+*.pyc
+
+# Output
+*.xlsx
+*.csv
+!sample_data/*.csv
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Vercel
+.vercel/

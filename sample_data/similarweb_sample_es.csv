@@ -1,21 +1,26 @@
-Domain,In HubSpot,Is new,Annual Revenue,Employees,Top country,Industry,Monthly visits,YoY traffic change,MoM traffic change,Total page views,Monthly transactions,HQ country,Email address,Average monthly visits
-zara.com,No,No,> 1B,> 10000,Spain,Apparel & Fashion/Clothing,45000000,0.125,0.032,180000000,> 1M,Spain,info@zara.com,44000000
-mango.com,No,Yes,500M - 1B,5000 - 10000,Spain,Apparel & Fashion/Clothing,18000000,0.083,0.015,72000000,500K - 1M,Spain,contact@mango.com,17500000
-elcorteingles.es,Yes,No,> 1B,> 10000,Spain,Department Stores,32000000,0.051,0.020,128000000,> 1M,Spain,info@elcorteingles.es,31500000
-primor.eu,No,Yes,50M - 100M,200 - 500,Spain,Beauty & Cosmetics/Skincare,6500000,0.220,0.058,26000000,100K - 500K,Spain,info@primor.eu,6200000
-druni.es,No,Yes,25M - 50M,200 - 500,Spain,Beauty & Cosmetics/Skincare,3200000,0.185,0.042,12800000,50K - 100K,Spain,contacto@druni.es,3100000
-tiendanimal.es,No,No,50M - 100M,500 - 1000,Spain,Pets/Pet Food,4800000,0.153,0.031,19200000,100K - 500K,Spain,info@tiendanimal.es,4600000
-kiwoko.com,No,No,25M - 50M,500 - 1000,Spain,Pets/Pet Food,3500000,0.102,0.028,14000000,50K - 100K,Spain,info@kiwoko.com,3400000
-pccomponentes.com,No,Yes,200M - 500M,1000 - 5000,Spain,Consumer Electronics/Laptops,12000000,0.070,-0.012,48000000,500K - 1M,Spain,info@pccomponentes.com,11800000
-mediamarkt.es,Yes,No,> 1B,> 10000,Spain,Consumer Electronics,15000000,0.035,0.008,60000000,500K - 1M,Germany,info@mediamarkt.es,14800000
-sprinter.es,No,Yes,50M - 100M,1000 - 5000,Spain,Sports & Outdoors/Sportswear,5200000,0.140,0.035,20800000,100K - 500K,Spain,info@sprinter.es,5000000
-deporvillage.com,No,Yes,25M - 50M,200 - 500,Spain,Sports & Outdoors/Equipment,2800000,0.250,0.060,11200000,50K - 100K,Spain,info@deporvillage.com,2700000
-farmaciasdirect.com,No,Yes,5M - 10M,50 - 200,Spain,Health & Wellness/Supplements,1800000,0.300,0.075,7200000,10K - 50K,Spain,info@farmaciasdirect.com,1700000
-promofarma.com,No,No,10M - 25M,50 - 200,Spain,Health & Wellness/Supplements,2200000,0.200,0.040,8800000,50K - 100K,Spain,info@promofarma.com,2100000
-dentix.com,No,No,100M - 200M,5000 - 10000,Spain,Health & Wellness,950000,0.120,0.025,3800000,< 10K,Spain,info@dentix.com,920000
-sanitas.es,No,No,> 1B,> 10000,Spain,Health & Wellness,3200000,0.080,0.018,12800000,10K - 50K,Spain,info@sanitas.es,3100000
-tutete.com,No,Yes,1M - 5M,10 - 50,Spain,Toys & Baby/Baby Products,850000,0.350,0.080,3400000,10K - 50K,Spain,info@tutete.com,820000
-mundopet.es,No,Yes,1M - 5M,10 - 50,Spain,Pets/Pet Food,620000,0.280,0.055,2480000,< 10K,Spain,info@mundopet.es,600000
-bulevip.com,No,Yes,5M - 10M,50 - 200,Spain,Health & Wellness/Fitness,1500000,0.180,0.030,6000000,10K - 50K,Spain,info@bulevip.com,1450000
-sephora.es,Yes,No,> 1B,> 10000,Spain,Beauty & Cosmetics,7800000,0.100,0.022,31200000,100K - 500K,France,info@sephora.es,7600000
-mascotas1000.com,No,Yes,< 1M,1 - 10,Spain,Pets/Pet Food,380000,0.400,0.090,1520000,< 10K,Spain,info@mascotas1000.com,360000
+Domain,Get data from,In HubSpot,Is new,Annual Revenue,Employees,Top country,Industry,Monthly visits,YoY traffic change,Total page views,Monthly transactions,HQ country,Email address,Average monthly visits,MoM traffic change
+aliexpress.com,Worldwide,Yes,Yes,25M - 50M,"1,000 - 5,000",Spain,Retailers & General Merchandise/Shopping Portals & Search Engines,633073368,-0.0737,2820164438,100K+,China,,632735192,-0.0023
+amazon.es,Worldwide,Yes,,> 1B,"> 10,000",Spain,Retailers & General Merchandise/Shopping Portals & Search Engines,138002185,0.1339,1153411752,100K+,United States,,123843564,-0.1062
+elcorteingles.es,Worldwide,Yes,,> 1B,"> 10,000",Spain,Retailers & General Merchandise/Shopping Portals & Search Engines,43210849,0.0796,337806051,100K+,Spain,servicio_clientes@elcorteingles.es,29343133,0.0314
+mango.com,Worldwide,Yes,,> 1B,"> 10,000",Spain,Retailers & General Merchandise/Coupons & Rebates,38764298,0.0019,203109942,5K - 10K,Spain,contact.kr@mango.com,32548318,0.0753
+leroymerlin.es,Worldwide,Yes,,> 1B,"> 10,000",Spain,Business & Industrial/Building Construction & Maintenance,23299666,0.174,129157919,100K+,France,,21931062,0.1133
+bershka.com,Worldwide,Yes,Yes,> 1B,"> 10,000",Spain,Apparel/Clothing,21244210,0.1476,130559341,100K+,Spain,,16417407,0.0349
+pullandbear.com,Worldwide,Yes,,> 1B,"5,000 - 10,000",Spain,Apparel/Clothing,20499036,0.0912,126412291,100K+,Spain,contact@pullandbear.com,14611388,0.0994
+mediamarkt.es,Worldwide,Yes,,> 1B,"> 10,000",Spain,Retailers & General Merchandise/Shopping Portals & Search Engines,15405101,0.1088,54266741,100K+,Germany,,12884216,-0.0534
+chollometro.com,Worldwide,Yes,,,10 - 50,Spain,Retailers & General Merchandise/Coupons & Rebates,15301668,-0.0209,55882778,100K+,Spain,,14554056,-0.0271
+milanuncios.com,Worldwide,Yes,,25M - 50M,200 - 500,Spain,Retailers & General Merchandise/Classifieds,14870669,-0.2687,74417483,100K+,Spain,,16497430,0.1898
+massimodutti.com,Worldwide,Yes,,> 1B,"> 10,000",Spain,Apparel/Clothing,13995192,0.0923,91854436,100K+,Spain,contact@massimodutti.com,10006714,0.1587
+zalando.es,Worldwide,,,> 1B,0 - 10,Spain,Apparel/Footwear,13055082,0.1746,96449558,100K+,Germany,,9480725,0.0996
+sklum.com,Worldwide,Yes,,5M - 10M,200 - 500,Spain,Home & Garden/Home Furniture,11727421,0.4769,58911208,10K - 100K,Spain,info@sklum.com,8334836,0.3519
+primor.eu,Worldwide,Yes,,50M - 75M,50 - 200,Spain,Beauty & Personal Care/Perfumes & Fragrances,10696842,0.135,91196679,100K+,Spain,info@primor.eu,10236051,-0.2577
+zarahome.com,Worldwide,Yes,,200M - 500M,"5,000 - 10,000",Spain,Apparel/Clothing,10240325,0.1401,58310636,100K+,Belgium,info.sa@zarahome.com,7685470,-0.0034
+mangooutlet.com,Worldwide,,,10M - 15M,10 - 50,Spain,Apparel/Clothing,10002684,0.0876,87622969,100K+,France,,8490060,0.002
+vinted.es,Worldwide,,,200M - 500M,"1,000 - 5,000",Spain,Apparel/Clothing,9364735,0.3646,110040266,100K+,United States,opportunities@vinted.com,7901516,0.0269
+lidl.es,Worldwide,Yes,,> 1B,"> 10,000",Spain,Food & Groceries/Food,8661826,0.0695,67642472,100K+,United States,,7916997,-0.1013
+druni.es,Worldwide,Yes,,500M - 1B,"1,000 - 5,000",Spain,Beauty & Personal Care/Perfumes & Fragrances,8618432,0.3137,54352199,100K+,Spain,,7157565,-0.1559
+civitatis.com,Worldwide,Yes,,100M - 200M,200 - 500,Spain,Travel & Tourism/Travel Media & Publications,8173362,0.056,25927964,100K+,Spain,,8136969,0.1278
+ebay.es,Worldwide,,,> 1B,"> 10,000",Spain,Retailers & General Merchandise/Shopping Portals & Search Engines,7981908,-0.0393,37760721,100K+,United States,customerhelp@ebay.com,7286963,0.0163
+holafly.com,Worldwide,Yes,Yes,,200 - 500,Spain,Computers & Consumer Electronics/Consumer Electronic Accessories,7220790,1.0579,19433275,5K - 10K,Spain,help@holafly.com,5654391,0.1479
+ticketmaster.es,Worldwide,,,> 1B,"5,000 - 10,000",Spain,"Arts & Entertainment/Events, Shows & Cultural Attractions",6928192,2.1712,34524636,100K+,United States,media@ticketmaster.com,4248856,0.6477
+parfois.com,Worldwide,Yes,,50M - 75M,"1,000 - 5,000",Spain,Apparel/Apparel Accessories,6893637,0.2491,35383159,10K - 100K,Portugal,contact@parfois.com,4612603,0.024
+womensecret.com,Worldwide,Yes,,5M - 10M,10 - 50,Spain,Apparel/Clothing,6801382,0.2335,33434149,10K - 100K,Spain,womensecret@womensecret.com,3586492,0.086

@@ -88,25 +88,16 @@ def parse_employees_bucket(val) -> int:
 def parse_transactions_bucket(val) -> float:
     if not val or not isinstance(val, str) or val.strip().lower() == "nan":
         return 0.0
-    val = val.strip().replace(",", "")
-    # Handle "> X" and "< X" prefixes
-    prefix_mult = 1.0
-    if val.startswith(">"):
-        val = val.replace(">", "").strip()
-        prefix_mult = 1.5
-    elif val.startswith("<"):
-        val = val.replace("<", "").strip()
-        prefix_mult = 0.5
-    val = val.replace("+", "")
+    val = val.strip().replace(",", "").replace("+", "")
     if " - " in val:
         parts = val.split(" - ")
         nums = []
         for p in parts:
             p = p.strip()
-            if "M" in p:
-                nums.append(float(p.replace("M", "").strip()) * 1_000_000)
-            elif "K" in p:
-                nums.append(float(p.replace("K", "").strip()) * 1000)
+            if "K" in p:
+                nums.append(float(p.replace("K", "")) * 1000)
+            elif "M" in p:
+                nums.append(float(p.replace("M", "")) * 1_000_000)
             else:
                 try:
                     nums.append(float(p))
@@ -117,12 +108,12 @@ def parse_transactions_bucket(val) -> float:
         elif nums:
             return nums[0]
         return 0.0
-    if "M" in val:
-        return float(val.replace("M", "").strip()) * 1_000_000 * prefix_mult
     if "K" in val:
-        return float(val.replace("K", "").strip()) * 1000 * prefix_mult
+        return float(val.replace("K", "").strip()) * 1000
+    if "M" in val:
+        return float(val.replace("M", "").strip()) * 1_000_000
     try:
-        return float(val) * prefix_mult
+        return float(val)
     except ValueError:
         return 0.0
 

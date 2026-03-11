@@ -1,867 +1,622 @@
 """
-app.py — Scalapay Territory Engine
-Premium UI with Scalapay Design System
+app.py — Scalapay Territory Engine v4 (Streamlit)
+IT/FR/IB tiering, real SW transactions, travel sub-categories, HubSpot bulk-fetch.
 """
-
-import io
-import os
+import io, os, logging
 from datetime import datetime
-
 import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
-
 load_dotenv()
 
-from config import SCORING_WEIGHTS
+from config import SCORING_WEIGHTS, WHITESPACE_CATEGORIES
 from similarweb_client import ingest
 from hubspot_client import enrich_with_hubspot
 from enrichment import enrich_dataframe
 from scoring import score_dataframe
 from utils import get_logger
 
+# ── LOG CAPTURE ────────────────────────────────────────────
+# Capture all app logs into a list for display
+class StreamlitLogHandler(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        if "log_messages" not in st.session_state:
+            st.session_state.log_messages = []
+    def emit(self, record):
+        ts = datetime.fromtimestamp(record.created).strftime("%H:%M:%S")
+        msg = f"[{ts}] {record.name} — {record.getMessage()}"
+        if record.levelno >= logging.ERROR:
+            msg = f"❌ {msg}"
+        elif record.levelno >= logging.WARNING:
+            msg = f"⚠️ {msg}"
+        else:
+            msg = f"✅ {msg}"
+        st.session_state.log_messages.append(msg)
+
+_log_handler = StreamlitLogHandler()
+_log_handler.setLevel(logging.INFO)
+for logger_name in ["app", "enrichment", "hubspot_client", "scoring", "utils", "similarweb_client"]:
+    lg = logging.getLogger(logger_name)
+    lg.addHandler(_log_handler)
+    lg.setLevel(logging.INFO)
+
 log = get_logger("app")
+FLAGS = {"ES": "🇪🇸", "FR": "🇫🇷", "PT": "🇵🇹", "IT": "🇮🇹"}
 
-# ── PAGE CONFIG ─────────────────────────────────────────────
-st.set_page_config(
-    page_title="Scalapay Territory Engine",
-    page_icon="🎯",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+st.set_page_config(page_title="Scalapay Territory Engine", page_icon="🎯", layout="wide", initial_sidebar_state="expanded")
 
-# ── SCALAPAY DESIGN SYSTEM CSS ──────────────────────────────
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap');
-
-    /* ─── DARK MODE PALETTE ───
-       BG:       #0E1117 (main), #1A1D23 (sidebar/cards)
-       Surface:  #242830 (elevated cards)
-       Border:   #2D3139
-       Text:     #FAFAFA (primary), #9CA3AF (secondary), #6B7280 (muted)
-       Coral:    #EA5440 (primary accent)
-       CoralLt:  #F27060 (hover)
-    ─── */
-
-    .stApp {
-        font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
-    }
-    h1, h2, h3, h4, h5, h6, p, span, div, label {
-        font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif !important;
-    }
-
-    /* ─── SIDEBAR ─── */
-    section[data-testid="stSidebar"] {
-        background: #1A1D23 !important;
-        border-right: 1px solid #2D3139;
-    }
-    section[data-testid="stSidebar"] .stMarkdown h3 {
-        font-size: 0.8rem;
-        font-weight: 600;
-        color: #6B7280 !important;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        margin-bottom: 4px;
-    }
-
-    /* ─── HEADER ─── */
-    .te-header {
-        padding: 24px 0 20px 0;
-        border-bottom: 1px solid #2D3139;
-        margin-bottom: 28px;
-    }
-    .te-logo-row {
-        display: flex;
-        align-items: center;
-        gap: 14px;
-        margin-bottom: 6px;
-    }
-    .te-logo-badge {
-        background: linear-gradient(135deg, #EA5440 0%, #F27060 100%);
-        color: #FFFFFF !important;
-        font-weight: 700;
-        font-size: 0.7rem;
-        padding: 5px 10px;
-        border-radius: 8px;
-        letter-spacing: 0.03em;
-    }
-    .te-title {
-        font-size: 1.75rem;
-        font-weight: 700;
-        color: #FAFAFA !important;
-        margin: 0;
-        line-height: 1.2;
-    }
-    .te-subtitle {
-        color: #9CA3AF !important;
-        font-size: 0.92rem;
-        margin: 4px 0 0 0;
-        font-weight: 400;
-    }
-
-    /* ─── SIDEBAR SECTIONS ─── */
-    .sidebar-section {
-        background: #242830;
-        border: 1px solid #2D3139;
-        border-radius: 12px;
-        padding: 16px;
-        margin-bottom: 16px;
-    }
-    .sidebar-divider {
-        border: none;
-        border-top: 1px solid #2D3139;
-        margin: 20px 0;
-    }
-
-    /* ─── KPI CARDS ─── */
-    .kpi-card {
-        background: #242830 !important;
-        border: 1px solid #2D3139;
-        border-radius: 14px;
-        padding: 22px 18px;
-        text-align: center;
-        transition: all 0.2s ease;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-    }
-    .kpi-card:hover {
-        border-color: #EA5440;
-        box-shadow: 0 4px 16px rgba(234,84,64,0.20);
-        transform: translateY(-2px);
-    }
-    .kpi-value {
-        font-size: 1.8rem;
-        font-weight: 700;
-        color: #FAFAFA !important;
-        line-height: 1.2;
-        margin-bottom: 4px;
-    }
-    .kpi-value-gold { color: #FBBF24 !important; }
-    .kpi-value-coral { color: #EA5440 !important; }
-    .kpi-value-green { color: #34D399 !important; }
-    .kpi-label {
-        color: #6B7280 !important;
-        font-size: 0.72rem;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        font-weight: 500;
-    }
-
-    /* ─── TIER BADGES ─── */
-    .tier-gold {
-        background: rgba(251,191,36,0.15);
-        color: #FBBF24;
-        font-weight: 600;
-        padding: 2px 10px;
-        border-radius: 20px;
-        font-size: 0.8rem;
-    }
-    .tier-silver {
-        background: rgba(156,163,175,0.15);
-        color: #9CA3AF;
-        font-weight: 600;
-        padding: 2px 10px;
-        border-radius: 20px;
-        font-size: 0.8rem;
-    }
-    .tier-bronze {
-        background: rgba(251,146,60,0.15);
-        color: #FB923C;
-        font-weight: 600;
-        padding: 2px 10px;
-        border-radius: 20px;
-        font-size: 0.8rem;
-    }
-
-    /* ─── DATA TABLES ─── */
-    div[data-testid="stDataFrame"] {
-        border: 1px solid #2D3139;
-        border-radius: 12px;
-        overflow: hidden;
-    }
-
-    /* ─── BUTTONS ─── */
-    .stButton > button[kind="primary"] {
-        background: linear-gradient(135deg, #EA5440 0%, #F27060 100%);
-        border: none;
-        border-radius: 10px;
-        font-weight: 600;
-        font-size: 0.9rem;
-        padding: 10px 24px;
-        color: #FFFFFF !important;
-        transition: all 0.2s ease;
-        box-shadow: 0 2px 12px rgba(234,84,64,0.30);
-    }
-    .stButton > button[kind="primary"]:hover {
-        box-shadow: 0 4px 20px rgba(234,84,64,0.45);
-        transform: translateY(-1px);
-    }
-    .stButton > button[kind="secondary"] {
-        border-radius: 10px;
-        font-weight: 500;
-        border: 1px solid #2D3139;
-        color: #FAFAFA !important;
-    }
-
-    /* ─── TABS ─── */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-        border-bottom: 1px solid #2D3139;
-    }
-    .stTabs [data-baseweb="tab"] {
-        border-radius: 8px 8px 0 0;
-        font-weight: 500;
-        font-size: 0.85rem;
-        padding: 8px 16px;
-        color: #9CA3AF !important;
-    }
-    .stTabs [aria-selected="true"] {
-        border-bottom: 2px solid #EA5440 !important;
-        color: #EA5440 !important;
-    }
-
-    /* ─── PROGRESS BAR ─── */
-    .stProgress > div > div > div > div {
-        background: linear-gradient(90deg, #EA5440, #F27060);
-        border-radius: 8px;
-    }
-
-    /* ─── PHASE HEADERS ─── */
-    .phase-header {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        padding: 12px 0 6px 0;
-    }
-    .phase-number {
-        background: #EA5440;
-        color: #FFFFFF !important;
-        width: 26px;
-        height: 26px;
-        border-radius: 50%;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 0.75rem;
-        font-weight: 700;
-        flex-shrink: 0;
-    }
-    .phase-text {
-        font-size: 1rem;
-        font-weight: 600;
-        color: #FAFAFA !important;
-    }
-
-    /* ─── LANDING STATE ─── */
-    .landing-container {
-        text-align: center;
-        padding: 80px 20px;
-    }
-    .landing-icon {
-        font-size: 3.5rem;
-        margin-bottom: 16px;
-        opacity: 0.9;
-    }
-    .landing-title {
-        font-size: 1.25rem;
-        font-weight: 600;
-        color: #FAFAFA !important;
-        margin-bottom: 8px;
-    }
-    .landing-desc {
-        color: #9CA3AF !important;
-        font-size: 0.9rem;
-        max-width: 400px;
-        margin: 0 auto;
-        line-height: 1.5;
-    }
-
-    /* ─── FOOTER ─── */
-    .te-footer {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 16px 0;
-        border-top: 1px solid #2D3139;
-        margin-top: 32px;
-    }
-    .te-footer-left {
-        color: #6B7280 !important;
-        font-size: 0.78rem;
-    }
-    .te-footer-logo {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        color: #6B7280 !important;
-        font-size: 0.75rem;
-    }
-    .te-footer-logo .scalapay-heart {
-        color: #EA5440 !important;
-        font-size: 0.85rem;
-    }
-
-    /* ─── EXPANDER ─── */
-    .streamlit-expanderHeader {
-        font-weight: 500;
-        font-size: 0.9rem;
-        color: #FAFAFA !important;
-    }
-
-    /* ─── SLIDER ─── */
-    .stSlider [data-baseweb="slider"] [role="slider"] {
-        background-color: #EA5440;
-    }
-    .stSlider [data-baseweb="slider"] div[data-testid="stTickBar"] > div {
-        background-color: #EA5440;
-    }
-
-    /* ─── ALERTS ─── */
-    .stAlert {
-        border-radius: 10px;
-    }
-
-    /* ─── DIVIDERS in main content ─── */
-    hr {
-        border-color: #2D3139 !important;
-    }
+    .stApp { background-color: #0a0a0f; }
+    section[data-testid="stSidebar"] { background-color: #111118; }
+    .main-header { background: linear-gradient(135deg, #6C3AED 0%, #2563EB 50%, #0EA5E9 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; font-size: 2.4rem; font-weight: 800; margin-bottom: 0; }
+    .sub-header { color: #94a3b8; font-size: 1.05rem; margin-top: -8px; margin-bottom: 24px; }
+    .metric-card { background: linear-gradient(135deg, #1e1b4b 0%, #172554 100%); border: 1px solid #334155; border-radius: 12px; padding: 20px; text-align: center; }
+    .metric-value { font-size: 2rem; font-weight: 700; color: #e2e8f0; }
+    .metric-label { color: #94a3b8; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; }
+    .tier-gold { color: #fbbf24; font-weight: 700; }
 </style>
 """, unsafe_allow_html=True)
 
-# ── HEADER ──────────────────────────────────────────────────
-st.markdown("""
-<div class="te-header">
-    <div class="te-logo-row">
-        <span class="te-logo-badge">TERRITORY ENGINE</span>
-    </div>
-    <p class="te-title">Lead Scoring & Territory Builder</p>
-    <p class="te-subtitle">Automated pipeline for IB (Iberia) / FR (France) / IT (Italy) sales expansion</p>
-</div>
-""", unsafe_allow_html=True)
+st.markdown('<p class="main-header">🎯 Scalapay Territory Engine</p>', unsafe_allow_html=True)
+st.markdown('<p class="sub-header">Lead scoring & territory lists — IT / FR / IB · v4.0</p>', unsafe_allow_html=True)
 
-# ── SIDEBAR — CONFIGURATION ────────────────────────────────
+# ── SIDEBAR ─────────────────────────────────────────────────
 with st.sidebar:
-    # Sidebar branding
-    st.markdown("""
-    <div style="display: flex; align-items: center; gap: 8px; padding: 4px 0 16px 0;">
-        <span style="color: #EA5440; font-size: 1.1rem;">♥</span>
-        <span style="font-weight: 600; font-size: 0.95rem; color: #FAFAFA;">scalapay</span>
-        <span style="color: #6B7280; font-size: 0.75rem; margin-left: auto;">Territory Engine</span>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown("### ⚙️ Pipeline Configuration")
 
-    st.markdown('<hr class="sidebar-divider">', unsafe_allow_html=True)
+    st.markdown("---")
+    st.markdown("**📊 Data Source**")
+    data_mode = st.radio("Similarweb input", [
+        "📁 Upload (XLSX/CSV)",
+        "🔄 Reload Export (add CRM)",
+        "🧪 Demo (sample data)",
+    ], index=0)
+    use_sample = "Demo" in data_mode
+    use_reload = "Reload" in data_mode
 
-    # ── DATA SOURCE ──
-    st.markdown("### Data Source")
+    # Initialize all file variables
+    file_ib = file_fr = file_it = reload_file = None
 
-    data_mode = st.radio(
-        "Input mode",
-        ["CSV Upload", "API"],
-        index=0,
-        label_visibility="collapsed",
-        help="Upload a Similarweb export file, or connect via API if you have a key.",
-    )
+    if use_reload:
+        st.markdown("---")
+        st.markdown("**📂 Upload Previous Export**")
+        st.caption("Upload a scored Excel export to add HubSpot CRM enrichment on top. Keeps all existing scraping data.")
+        reload_file = st.file_uploader("Previously scored .xlsx", type=["xlsx","xls"], key="reload")
+    elif not use_sample:
+        st.markdown("---")
+        st.markdown("**📂 Upload Similarweb Exports**")
+        file_ib = st.file_uploader("🇪🇸 Iberia (ES)", type=["csv","xlsx","xls"], key="sw_ib")
+        file_fr = st.file_uploader("🇫🇷 France", type=["csv","xlsx","xls"], key="sw_fr")
+        file_it = st.file_uploader("🇮🇹🇵🇹 Italy / Portugal (IT tiering)", type=["csv","xlsx","xls"], key="sw_it")
 
-    territory_labels = {"IB": "IB (Iberia: ES + PT)", "FR": "FR (France)", "IT": "IT (Italy)"}
-    countries = st.multiselect(
-        "Target territories",
-        ["IB", "FR", "IT"],
-        default=["IB", "FR"],
-        format_func=lambda x: territory_labels[x],
-    )
-
-    uploaded_files = {}
-    if "CSV" in data_mode:
-        st.markdown('<hr class="sidebar-divider">', unsafe_allow_html=True)
-        st.markdown("### Upload Data")
-        for c in countries:
-            upload_label = {"IB": "Iberia (ES+PT)", "FR": "France", "IT": "Italy"}.get(c, c)
-            f = st.file_uploader(
-                f"Similarweb — {upload_label}",
-                type=["csv", "xlsx", "xls"],
-                key=f"sw_upload_{c}",
-            )
-            if f:
-                uploaded_files[c] = f
-
-        if not uploaded_files:
-            use_sample = st.checkbox("Use sample data for demo", value=True)
-        else:
-            use_sample = False
-    else:
-        use_sample = False
-
-    # ── INTEGRATIONS ──
-    st.markdown('<hr class="sidebar-divider">', unsafe_allow_html=True)
-    st.markdown("### Integrations")
+    st.markdown("---")
+    st.markdown("**🔌 Integrations**")
 
     enable_hubspot = st.checkbox(
-        "HubSpot CRM",
+        "🔗 HubSpot CRM cross-check",
         value=bool(os.getenv("HUBSPOT_API_KEY")),
-        help="Cross-references every domain against your HubSpot CRM to find existing companies, active deals, and deal owners. Assigns a warmth label (Active Pipeline, In CRM No Deal, Net New, Lost 6m+ ago, Recently Lost, Existing Client) that feeds into the lead score.",
+        help="Bulk-fetches ALL companies from HubSpot CRM (~200 API calls). Matches leads by domain + brand root for cross-country detection (e.g. zooplus.es → zooplus.it). Classifies warmth: Warm / Net New / Cold-Lost / Won. Requires HUBSPOT_API_KEY in .env.",
     )
-    st.markdown('<p style="font-size:0.75rem; color:#6B7280; margin-top:-10px; margin-bottom:12px;">Matches leads to CRM records, deal stages, and owners. Determines lead warmth for scoring.</p>', unsafe_allow_html=True)
-
     enable_scraping = st.checkbox(
-        "Competitor Detection",
+        "🔍 Checkout / competitor scraping",
         value=False,
-        help="Scrapes merchant websites (homepage, product pages, checkout paths, JS bundles) to detect BNPL competitors like Klarna, Alma, Sequra, and Oney. Also checks structured data, sitemaps, and DNS records. Uses 9 detection layers for ~75% coverage. Enables the whitespace score component.",
+        help="Visits each merchant's homepage and scans for BNPL provider scripts (Klarna, Alma, Oney, etc.) and PSP integrations (Stripe, Adyen, Checkout.com). Detects competitors already active. Slower: ~5s per domain.",
     )
-    st.markdown('<p style="font-size:0.75rem; color:#6B7280; margin-top:-10px; margin-bottom:12px;">Detects Klarna, Alma, Sequra & 11 more BNPL providers across 9 scraping layers. Feeds whitespace scoring.</p>', unsafe_allow_html=True)
-
-    enable_ads_check = st.checkbox(
-        "Ad Pixel Detection",
+    enable_ads = st.checkbox(
+        "📡 Ad pixel detection",
         value=False,
-        help="Detects Meta (Facebook) Pixel and Google Ads conversion tags on merchant homepages. Merchants with active ad pixels are investing in customer acquisition — a signal they have budget and need checkout optimization. Requires competitor detection to be enabled.",
+        help="Scans homepages for Meta Pixel (fbq) and Google Ads (gtag/AW-) tags. Merchants with active pixels are likely spending on acquisition = higher conversion intent. Requires scraping enabled.",
     )
-    st.markdown('<p style="font-size:0.75rem; color:#6B7280; margin-top:-10px; margin-bottom:12px;">Finds Meta Pixel & Google Ads tags. Signals ad spend = budget for checkout optimization.</p>', unsafe_allow_html=True)
 
-    # ── SCORING WEIGHTS ──
-    st.markdown('<hr class="sidebar-divider">', unsafe_allow_html=True)
-    st.markdown("### Scoring Weights")
-    st.markdown('<p style="font-size:0.75rem; color:#6B7280; margin-bottom:8px;">Adjust how each component contributes to the final priority score (0–100).</p>', unsafe_allow_html=True)
+    st.markdown("---")
+    st.markdown("**📋 Filters**")
+    min_traffic = st.number_input("Min monthly traffic", value=0, step=50_000)
+    exclude_won = st.checkbox("Exclude 'Existing Won' deals", value=True)
 
-    w_tier = st.slider("Industry Tier", 0.0, 0.5, SCORING_WEIGHTS["tier"], 0.05,
-        help="How well does BNPL convert in this vertical? Gold verticals (Apparel, Beauty, Pharma) have highest contribution margins. Mapped per country from Scalapay internal data.")
-    w_pen = st.slider("Penetration / TTV", 0.0, 0.5, SCORING_WEIGHTS["penetration_ttv"], 0.05,
-        help="Revenue opportunity. Combines the BNPL penetration rate for this vertical (from Scalapay data) with estimated annual transaction value based on traffic × conversion × AOV × Scalapay share.")
-    w_growth = st.slider("Traffic Growth", 0.0, 0.5, SCORING_WEIGHTS["traffic_growth"], 0.05,
-        help="Merchant momentum. Blends YoY growth (60% weight, structural) with MoM growth (40%, recent trend). Proxy for ad spend: growing merchants invest in acquisition and need checkout optimization.")
-    w_warmth = st.slider("Lead Warmth", 0.0, 0.5, SCORING_WEIGHTS["lead_warmth"], 0.05,
-        help="CRM status from HubSpot. Active Pipeline scores highest (10), then In CRM No Deal (7), Net New (5), Lost 6m+ ago (4), Recently Lost (3), Existing Client (2). Without HubSpot enabled, all leads default to Net New.")
-    w_ws = st.slider("Whitespace", 0.0, 0.5, SCORING_WEIGHTS["whitespace"], 0.05,
-        help="Greenfield opportunity. Scores 10/10 if zero real BNPL competitors are detected on the merchant site. PayPal BNPL alone still counts as whitespace (8/10). Requires competitor detection enabled.")
+    st.markdown("---")
+    st.markdown("**🎚️ Score Weights**")
+    st.caption("Each slider 0–100. Sum should equal 100%. Exceeding 100% will show a warning.")
 
-    # Dynamic weight sum
-    total_w = w_tier + w_pen + w_growth + w_warmth + w_ws
-    pct = int(round(total_w * 100))
-    if abs(total_w - 1.0) < 0.001:
-        color = "#34D399"
-        label = "✓"
-    elif total_w > 1.0:
-        color = "#EA5440"
-        label = "⚠"
+    w_tier = st.slider("Tier — country-specific risk mapping (IT/FR/IB). Travel: 14 sub-categories.", 0, 100, 25, step=5, help="Gold/Silver/Bronze. Low risk = high CM.")
+    w_pen = st.slider("Penetration / TTV — BNPL adoption × estimated merchant revenue.", 0, 100, 25, step=5, help="Higher penetration + bigger MR = higher score.")
+    w_growth = st.slider("Growth — YoY (60%) + MoM (40%) traffic momentum.", 0, 100, 15, step=5, help=">50% YoY = max. Negative growth reduces score.")
+    w_warmth = st.slider("Approachability — CRM status (Net New > Lost>6mo > Stale > Cold < Warm).", 0, 100, 20, step=5, help="Net New=max. Stale deal (no contact 45d)=re-approachable. Warm=colleague working it.")
+    w_mkt = st.slider("Market Opportunity — BNPL competition at checkout.", 0, 100, 15, step=5, help="TOP=no BNPL. MEDIUM-HIGH=1 minor. MEDIUM=1 direct. LOW=3+ saturated.")
+
+    w_sum = w_tier + w_pen + w_growth + w_warmth + w_mkt
+    if w_sum > 100:
+        st.error(f"⚠️ Weights sum: {w_sum}% — exceeds 100%! Reduce some weights.")
+    elif w_sum == 100:
+        st.success(f"✅ Weights sum: {w_sum}%")
     else:
-        color = "#FBBF24"
-        label = "⚠"
-    st.markdown(f'<p style="font-size:0.85rem; font-weight:600; color:{color}; margin-top:4px;">{label} Total: {pct}%</p>', unsafe_allow_html=True)
-
-    # ── FILTERS ──
-    st.markdown('<hr class="sidebar-divider">', unsafe_allow_html=True)
-    st.markdown("### Filters")
-    min_traffic = st.number_input("Minimum monthly traffic", value=0, step=50_000)
-    exclude_won = st.checkbox("Exclude Existing Clients", value=True)
+        st.warning(f"⚡ Weights sum: {w_sum}% — below 100%, scores won't use full range.")
 
 
-# ── MAIN PIPELINE ───────────────────────────────────────────
-def load_sample_data(country: str) -> pd.DataFrame:
-    file_code = {"IB": "es", "FR": "fr", "IT": "it"}.get(country, country.lower())
-    path = f"sample_data/similarweb_sample_{file_code}.csv"
+# ── PIPELINE ────────────────────────────────────────────────
+def load_sample_data(country):
+    path = f"sample_data/similarweb_sample_{country.lower()}.csv"
     try:
         df = pd.read_csv(path)
         df["country"] = country.upper()
         from utils import clean_similarweb_df
         return clean_similarweb_df(df)
     except Exception as e:
-        st.error(f"Could not load sample data for {country}: {e}")
+        st.error(f"Sample data error for {country}: {e}")
         return pd.DataFrame()
 
 
-def run_pipeline():
-    # ── PHASE 1: DATA INGESTION ──
-    st.markdown("""
-    <div class="phase-header">
-        <span class="phase-number">1</span>
-        <span class="phase-text">Data Ingestion & CRM Cross-Check</span>
-    </div>
-    """, unsafe_allow_html=True)
-    progress = st.progress(0, text=f"📂 Loading data — 0/{len(countries)} territories...")
+def show_scraping_report(df):
+    """Show enrichment performance report — honest numbers."""
+    st.markdown("### 📡 Enrichment Performance Report")
 
-    all_dfs = []
-    for i, country in enumerate(countries):
-        if use_sample:
-            df = load_sample_data(country)
-        elif country in uploaded_files:
-            df = ingest(country, uploaded_file=uploaded_files[country])
+    total = len(df)
+    if total == 0:
+        return
+
+    # Dedicated BNPL (excludes PayPal)
+    has_bnpl = (df["competitors_bnpl"].astype(str).str.strip() != "").sum() if "competitors_bnpl" in df.columns else 0
+    has_paypal = df["has_paypal"].sum() if "has_paypal" in df.columns else 0
+    paypal_only = int(has_paypal) - has_bnpl  # PayPal but no dedicated BNPL
+    if paypal_only < 0: paypal_only = 0
+    no_bnpl = total - has_bnpl - paypal_only
+
+    # PSP & pixels
+    has_psp = (df["psp_detected"].astype(str).str.strip() != "").sum() if "psp_detected" in df.columns else 0
+    has_meta = df["has_meta_pixel"].sum() if "has_meta_pixel" in df.columns else 0
+    has_gads = df["has_google_ads"].sum() if "has_google_ads" in df.columns else 0
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.metric("🎯 Dedicated BNPL", f"{has_bnpl}/{total}", f"{has_bnpl/total*100:.1f}% hit rate")
+    with c2:
+        st.metric("💳 PayPal Only", f"{paypal_only}", f"Not a real competitor")
+    with c3:
+        st.metric("📘 Meta Pixel", f"{int(has_meta)}/{total}", f"{has_meta/total*100:.1f}%")
+    with c4:
+        st.metric("📊 Google Ads", f"{int(has_gads)}/{total}", f"{has_gads/total*100:.1f}%")
+
+    st.caption(f"🟢 {no_bnpl} merchants with NO dedicated BNPL at checkout (best opportunity)")
+
+    # Competitor breakdown
+    if has_bnpl > 0 and "competitors_bnpl" in df.columns:
+        st.markdown("**Dedicated BNPL competitors found:**")
+        all_comps = []
+        for val in df["competitors_bnpl"].dropna():
+            if str(val).strip():
+                all_comps.extend([c.strip() for c in str(val).split(",") if c.strip()])
+        if all_comps:
+            from collections import Counter
+            comp_counts = Counter(all_comps)
+            comp_df = pd.DataFrame(comp_counts.most_common(15), columns=["Competitor", "Merchants"])
+            st.dataframe(comp_df, use_container_width=True, height=200)
+
+    # Market opportunity breakdown
+    opp_counts = df["opportunity_level"].value_counts().to_dict() if "opportunity_level" in df.columns else {}
+    if opp_counts:
+        st.markdown("**Market Opportunity distribution:**")
+        for level in ["TOP", "MEDIUM-HIGH", "MEDIUM", "LOW"]:
+            n = opp_counts.get(level, 0)
+            pct = n / total * 100
+            bar = "█" * int(pct / 2)
+            color = {"TOP": "🟢", "MEDIUM-HIGH": "🔵", "MEDIUM": "🟡", "LOW": "🔴"}.get(level, "⚪")
+            st.caption(f"{color} **{level}**: {n} ({pct:.1f}%) {bar}")
+
+    # Sites not reached
+    if has_comp == 0 and has_psp == 0:
+        st.warning("⚠️ No enrichment data found — scraping may not have been enabled for this export.")
+    else:
+        unreached = total - max(has_comp, has_psp, int(has_meta), int(has_gads))
+        if unreached > 0:
+            st.caption(f"ℹ️ ~{unreached} sites ({unreached/total*100:.0f}%) returned no detectable data (Cloudflare blocks, SPAs, or no BNPL/PSP present)")
+
+
+def run_reload_pipeline():
+    """Reload a previous export, add HubSpot CRM, re-score."""
+    st.session_state.log_messages = []
+    weights = {
+        "tier": w_tier, "penetration": w_pen,
+        "growth": w_growth, "warmth": w_warmth, "market_opportunity": w_mkt,
+    }
+    if w_sum > 100:
+        st.error("Cannot generate: weights exceed 100%.")
+        return None
+
+    st.markdown("### 📥 Phase 1 — Loading Previous Export")
+    try:
+        xls = pd.ExcelFile(reload_file)
+        # Read main sheet
+        if "All Leads" in xls.sheet_names:
+            df = pd.read_excel(reload_file, sheet_name="All Leads")
+        elif "All" in xls.sheet_names:
+            df = pd.read_excel(reload_file, sheet_name="All")
         else:
-            df = ingest(country)
+            df = pd.read_excel(reload_file, sheet_name=0)
+        st.success(f"✅ Loaded {len(df)} leads from export ({len(df.columns)} columns)")
+    except Exception as e:
+        st.error(f"Failed to read export: {e}")
+        return None
 
-        if not df.empty:
-            all_dfs.append(df)
+    # Show what enrichment data already exists
+    has_scraping = "competitors_bnpl" in df.columns and (df["competitors_bnpl"].astype(str).str.strip() != "").any()
+    has_hs = "hs_exists" in df.columns and df["hs_exists"].any()
 
-        progress.progress((i + 1) / len(countries), text=f"📂 Loading data — {i+1}/{len(countries)} territories loaded")
+    if has_scraping:
+        st.info(f"✅ Export has scraping data — {(df['competitors_bnpl'].astype(str).str.strip() != '').sum()} merchants with competitor info")
+    else:
+        st.caption("ℹ️ No scraping data in export")
+
+    if has_hs:
+        st.info(f"✅ Export already has HubSpot data — {df['hs_exists'].sum()} matches")
+    else:
+        st.caption("ℹ️ No HubSpot data in export — will add now")
+
+    # Show scraping report if data exists
+    if has_scraping:
+        show_scraping_report(df)
+
+    # ── PHASE 2: HUBSPOT ─────────────────────────────
+    st.markdown("### 🔗 Phase 2 — HubSpot CRM Cross-Check")
+    if enable_hubspot:
+        with st.spinner("🔄 HubSpot bulk fetch & matching..."):
+            # Remove old HubSpot columns if they exist
+            hs_cols = [c for c in df.columns if c.startswith("hs_") or c == "lead_warmth"]
+            df = df.drop(columns=[c for c in hs_cols if c in df.columns], errors='ignore')
+
+            df = enrich_with_hubspot(df)
+            hs_found = df["hs_exists"].sum() if "hs_exists" in df.columns else 0
+            st.success(f"✅ HubSpot: {hs_found} matches found")
+
+            # Show warmth distribution
+            if "lead_warmth" in df.columns:
+                warmth = df["lead_warmth"].value_counts()
+                st.markdown("**Approachability distribution:**")
+                for status, count in warmth.items():
+                    st.caption(f"  {status}: {count}")
+    else:
+        if "lead_warmth" not in df.columns:
+            df["lead_warmth"] = "Net New"
+        st.info("ℹ️ HubSpot disabled — keeping existing warmth data or defaulting to Net New")
+
+    # ── PHASE 3: RE-SCORE ─────────────────────────────
+    st.markdown("### 🧮 Phase 3 — Re-Scoring")
+    with st.spinner("Re-computing scores with CRM data..."):
+        # Remove old scores
+        for col in ["Sales_Priority_Score", "warmth_score", "market_opportunity_score",
+                     "tier_score", "penetration_score", "growth_score", "account_segment",
+                     "opportunity_level", "n_competitors", "has_direct_competitor", "competitors_list"]:
+            if col in df.columns:
+                df = df.drop(columns=[col])
+        df = score_dataframe(df, weights)
+
+    if exclude_won and "lead_warmth" in df.columns:
+        before = len(df)
+        df = df[df["lead_warmth"] != "Existing Won"].reset_index(drop=True)
+        excluded = before - len(df)
+        if excluded > 0:
+            st.caption(f"Excluded {excluded} 'Existing Won' merchants")
+
+    st.success(f"✅ **{len(df)} leads re-scored** with CRM data")
+    return df
+
+
+def run_pipeline():
+    # Clear previous logs
+    st.session_state.log_messages = []
+    # Build weights dict
+    weights = {
+        "tier": w_tier, "penetration": w_pen,
+        "growth": w_growth, "warmth": w_warmth, "market_opportunity": w_mkt,
+    }
+    if w_sum > 100:
+        st.error("Cannot generate: weights exceed 100%.")
+        return None
+
+    # ── PHASE 1: INGEST ─────────────────────────────
+    st.markdown("### 📥 Phase 1 — Data Ingestion")
+    progress = st.progress(0, text="Loading data...")
+    all_dfs = []
+
+    if use_sample:
+        for country in ["ES", "FR"]:
+            df = load_sample_data(country)
+            if not df.empty:
+                all_dfs.append(df)
+                st.success(f"✅ {FLAGS.get(country,'')} {country}: {len(df)} demo leads")
+    else:
+        uploads = []
+        if file_ib: uploads.append((file_ib, "ES"))
+        if file_fr: uploads.append((file_fr, "FR"))
+        if file_it: uploads.append((file_it, "IT"))
+
+        for i, (f, country) in enumerate(uploads):
+            df = ingest(country, uploaded_file=f)
+            if not df.empty:
+                all_dfs.append(df)
+                st.success(f"✅ {FLAGS.get(country,'')} {country}: {len(df)} leads loaded")
+            else:
+                st.warning(f"⚠️ {country}: No data in file")
+            progress.progress((i + 1) / max(len(uploads), 1))
 
     if not all_dfs:
-        st.error("No data to process. Upload CSVs or enable sample data.")
+        st.error("No data to process. Upload files or enable demo mode.")
         return None
 
     df = pd.concat(all_dfs, ignore_index=True)
-    total_leads = len(df)
-    progress.progress(1.0, text=f"✓ Data loaded — {total_leads} leads across {', '.join(countries)}")
+    st.info(f"📊 **{len(df)} total leads** across {', '.join(df['country'].unique())}")
 
-    traffic_col = "monthly_traffic" if "monthly_traffic" in df.columns else None
-    if traffic_col:
+    # Traffic filter
+    if min_traffic > 0 and "monthly_traffic" in df.columns:
         before = len(df)
-        df = df[df[traffic_col] >= min_traffic].reset_index(drop=True)
-        filtered = before - len(df)
-        if filtered > 0:
-            st.caption(f"Filtered out {filtered} leads below {min_traffic:,} monthly traffic")
+        df = df[df["monthly_traffic"] >= min_traffic].reset_index(drop=True)
+        if before - len(df) > 0:
+            st.caption(f"Filtered {before - len(df)} leads below {min_traffic:,} traffic")
 
+    progress.progress(1.0, text="Phase 1 complete ✓")
+
+    # ── PHASE 2: HUBSPOT ─────────────────────────────
+    st.markdown("### 🔗 Phase 2 — HubSpot Cross-Check")
     if enable_hubspot:
-        total_leads = len(df)
-        hs_progress = st.progress(0, text=f"🔍 HubSpot CRM — checking 0/{total_leads} domains...")
-
-        def update_hs(current, total):
-            pct = current / total if total > 0 else 1
-            hs_progress.progress(pct, text=f"🔍 HubSpot CRM — {current}/{total} domains checked")
-
-        df = enrich_with_hubspot(df, progress_callback=update_hs)
-        hs_found = df["hs_exists"].sum() if "hs_exists" in df.columns else 0
-        hs_progress.progress(1.0, text=f"✓ HubSpot CRM — {hs_found}/{total_leads} records matched")
+        with st.spinner("🔄 HubSpot bulk fetch & matching..."):
+            df = enrich_with_hubspot(df)
+            hs_found = df["hs_exists"].sum() if "hs_exists" in df.columns else 0
+            st.success(f"✅ HubSpot: {hs_found} matches (bulk mode, ~200 API calls)")
     else:
         df["hs_exists"] = False
         df["hs_company_name"] = ""
-        df["pipeline"] = ""
-        df["deal_stage"] = ""
-        df["deal_owner"] = ""
+        df["hs_deal_stage"] = ""
+        df["hs_deal_owner"] = ""
         df["hs_cross_country"] = False
-        df["is_won"] = False
-        df["is_in_pipeline"] = False
+        df["hs_it_deal_found"] = False
         df["lead_warmth"] = "Net New"
+        st.info("ℹ️ HubSpot disabled — all leads classified as Net New")
 
-    progress.progress(1.0, text="Phase 1 complete")
-
-    # ── PHASE 2: ENRICHMENT ──
-    st.markdown("""
-    <div class="phase-header">
-        <span class="phase-number">2</span>
-        <span class="phase-text">Competitor & Ad Enrichment</span>
-    </div>
-    """, unsafe_allow_html=True)
-
+    # ── PHASE 3: ENRICHMENT ──────────────────────────
+    st.markdown("### 🔍 Phase 3 — Competitor & Ad Enrichment")
     if enable_scraping:
-        total_leads = len(df)
-        enrich_progress = st.progress(0, text=f"🌐 Competitor Detection — scanning 0/{total_leads} sites...")
-
-        def update_enrich(current, total):
-            pct = current / total if total > 0 else 1
-            enrich_progress.progress(pct, text=f"🌐 Competitor Detection — {current}/{total} sites scanned")
-
-        df = enrich_dataframe(df, enable_scraping=True, progress_callback=update_enrich)
-        comps_found = (df["competitors_bnpl"] != "").sum()
-        enrich_progress.progress(1.0, text=f"✓ Competitor Detection — BNPL found on {comps_found}/{total_leads} sites")
+        ep = st.progress(0, text="Scraping merchant sites...")
+        df = enrich_dataframe(df, enable_scraping=True,
+                              progress_callback=lambda c, t: ep.progress(c / t, text=f"Enriching {c}/{t}..."))
+        ep.progress(1.0, text="Enrichment complete ✓")
+        comps = (df["competitors_bnpl"] != "").sum()
+        st.success(f"✅ Competitor data for {comps} merchants")
+        show_scraping_report(df)
     else:
         df = enrich_dataframe(df, enable_scraping=False)
-        st.info("Competitor detection disabled — enable in sidebar for whitespace scoring")
+        st.info("ℹ️ Scraping disabled — competitor & ad columns empty")
 
-    # ── PHASE 3-5: SCORING ──
-    st.markdown("""
-    <div class="phase-header">
-        <span class="phase-number">3</span>
-        <span class="phase-text">Scoring & Tier Assignment</span>
-    </div>
-    """, unsafe_allow_html=True)
-    score_progress = st.progress(0, text="🧮 Computing scores...")
-    score_progress.progress(0.3, text=f"🧮 Assigning tiers to {len(df)} leads...")
-    df = score_dataframe(df)
-    score_progress.progress(0.8, text="🧮 Applying filters...")
+    # ── PHASE 4: SCORING ─────────────────────────────
+    st.markdown("### 🧮 Phase 4 — Scoring & Tiering")
+    with st.spinner("Computing scores with real SW transactions..."):
+        df = score_dataframe(df, weights)
 
     if exclude_won and "lead_warmth" in df.columns:
-        df = df[df["lead_warmth"] != "Existing Client"].reset_index(drop=True)
+        df = df[df["lead_warmth"] != "Existing Won"].reset_index(drop=True)
 
-    score_progress.progress(1.0, text=f"✓ Scoring complete — {len(df)} leads ready")
+    # Stats
+    sw_txn = (df.get("ttv_source", pd.Series(dtype=str)) == "SW").sum()
+    cr_fb = (df.get("ttv_source", pd.Series(dtype=str)) == "CR").sum()
+    st.success(f"✅ **{len(df)} scored leads** | TTV source: {sw_txn} from SW transactions, {cr_fb} from CR fallback")
     return df
 
 
 # ── GENERATE BUTTON ─────────────────────────────────────────
-col_btn1, col_btn2, _ = st.columns([1, 1, 3])
-with col_btn1:
-    generate = st.button("Generate Territory List", type="primary", width='stretch')
-with col_btn2:
+col1, col2, _ = st.columns([1, 1, 3])
+with col1:
+    btn_label = "🔄 Reload + CRM" if use_reload else "🚀 Generate Territory List"
+    can_run = (use_sample or use_reload and reload_file or file_ib or file_fr or file_it) and w_sum <= 100
+    generate = st.button(btn_label, type="primary", use_container_width=True, disabled=not can_run)
+with col2:
     if "result_df" in st.session_state and st.session_state.result_df is not None:
-        clear = st.button("Clear Results", width='stretch')
-        if clear:
+        if st.button("🗑️ Clear Results", use_container_width=True):
             st.session_state.result_df = None
             st.rerun()
 
 if generate:
-    result = run_pipeline()
+    if use_reload:
+        result = run_reload_pipeline()
+    else:
+        result = run_pipeline()
     if result is not None:
         st.session_state.result_df = result
 
-        try:
-            import pathlib
-            exports_dir = pathlib.Path(os.path.dirname(os.path.abspath(__file__))) / "exports"
-            exports_dir.mkdir(exist_ok=True)
-            ts = datetime.now().strftime("%Y%m%d_%H%M")
-            excel_path = exports_dir / f"territory_{ts}.xlsx"
-            result.to_excel(str(excel_path), index=False, engine="xlsxwriter")
-            csv_path = exports_dir / f"territory_{ts}.csv"
-            result.to_csv(str(csv_path), index=False)
-            st.success(f"Auto-saved to `exports/territory_{ts}.xlsx`")
-        except Exception as e:
-            st.warning(f"Auto-save failed: {e}")
-
-# ── RESULTS DISPLAY ─────────────────────────────────────────
+# ── RESULTS ─────────────────────────────────────────────────
 if "result_df" in st.session_state and st.session_state.result_df is not None:
     df = st.session_state.result_df
 
-    st.markdown('<hr style="border:none; border-top:1px solid #2D3139; margin: 28px 0;">', unsafe_allow_html=True)
+    st.markdown("---")
+    st.markdown("### 📊 Results Dashboard")
 
-    def render_kpi_cards(data):
-        k1, k2, k3, k4, k5 = st.columns(5)
-        n_leads = len(data)
-        gold_n = (data["tier"] == "GOLD").sum() if "tier" in data.columns else 0
-        avg_s = data["Sales_Priority_Score"].mean() if "Sales_Priority_Score" in data.columns and n_leads > 0 else 0
-        ttv = data["est_ttv_annual_eur"].sum() if "est_ttv_annual_eur" in data.columns else 0
-        ttv_str = f"€{ttv/1_000_000:.1f}M" if ttv >= 1_000_000 else f"€{ttv:,.0f}"
-        ws_n = data["is_whitespace"].sum() if "is_whitespace" in data.columns else 0
-        with k1:
-            st.markdown(f'<div class="kpi-card"><div class="kpi-value">{n_leads}</div><div class="kpi-label">Total Leads</div></div>', unsafe_allow_html=True)
-        with k2:
-            st.markdown(f'<div class="kpi-card"><div class="kpi-value kpi-value-gold">{gold_n}</div><div class="kpi-label">Gold Tier</div></div>', unsafe_allow_html=True)
-        with k3:
-            st.markdown(f'<div class="kpi-card"><div class="kpi-value kpi-value-coral">{avg_s:.1f}</div><div class="kpi-label">Avg Score</div></div>', unsafe_allow_html=True)
-        with k4:
-            st.markdown(f'<div class="kpi-card"><div class="kpi-value kpi-value-green">{ttv_str}</div><div class="kpi-label">Est. TTV</div></div>', unsafe_allow_html=True)
-        with k5:
-            st.markdown(f'<div class="kpi-card"><div class="kpi-value kpi-value-coral">{ws_n}</div><div class="kpi-label">Whitespace</div></div>', unsafe_allow_html=True)
+    # KPIs
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1:
+        st.markdown(f'<div class="metric-card"><div class="metric-value">{len(df)}</div><div class="metric-label">Total Leads</div></div>', unsafe_allow_html=True)
+    with c2:
+        gold = (df["tier"] == "GOLD").sum() if "tier" in df.columns else 0
+        st.markdown(f'<div class="metric-card"><div class="metric-value tier-gold">{gold}</div><div class="metric-label">Gold Tier</div></div>', unsafe_allow_html=True)
+    with c3:
+        avg = df["Sales_Priority_Score"].mean() if "Sales_Priority_Score" in df.columns else 0
+        st.markdown(f'<div class="metric-card"><div class="metric-value">{avg:.1f}</div><div class="metric-label">Avg Score</div></div>', unsafe_allow_html=True)
+    with c4:
+        ttv = df["est_ttv_annual_eur"].sum() if "est_ttv_annual_eur" in df.columns else 0
+        ttv_d = f"€{ttv/1e6:.1f}M" if ttv >= 1e6 else f"€{ttv:,.0f}"
+        st.markdown(f'<div class="metric-card"><div class="metric-value">{ttv_d}</div><div class="metric-label">Total Est. TTV</div></div>', unsafe_allow_html=True)
+    with c5:
+        top_opp = (df["opportunity_level"] == "TOP").sum() if "opportunity_level" in df.columns else 0
+        st.markdown(f'<div class="metric-card"><div class="metric-value">{top_opp}</div><div class="metric-label">TOP Opportunity</div></div>', unsafe_allow_html=True)
 
-    # ── Tabs
-    tab_full, tab_gold, tab_whitespace, tab_country = st.tabs([
-        "Full List", "Gold Tier", "Whitespace", "By Country"
-    ])
+    # Segments
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        n = (df["account_segment"] == "Strategic").sum() if "account_segment" in df.columns else 0
+        st.metric("Strategic (>€5M TTV)", n)
+    with c2:
+        n = (df["account_segment"] == "Enterprise").sum() if "account_segment" in df.columns else 0
+        st.metric("Enterprise (€500K–5M)", n)
+    with c3:
+        n = (df["account_segment"] == "Executive").sum() if "account_segment" in df.columns else 0
+        st.metric("Executive (<€500K)", n)
 
-    display_cols = [
-        "domain", "country", "tier", "scalapay_category", "segment", "Sales_Priority_Score",
-        "lead_warmth", "est_ttv_annual_eur", "est_mr_annual_eur",
-    ]
-    for col in ["category", "industry", "monthly_traffic", "annual_revenue_bucket",
-                 "employees_bucket", "yoy_growth", "mom_growth", "email",
-                 "competitors_bnpl", "competitors_count", "psp_detected",
-                 "pipeline", "deal_stage", "deal_owner", "is_won", "is_in_pipeline",
-                 "hs_cross_country", "in_hubspot_sw", "is_whitespace", "has_only_paypal_bnpl",
-                 "is_actionable", "bnpl_penetration_pct", "growth_score", "is_advertising_heavy",
-                 "channel_type", "hq_country", "top_country"]:
-        if col in df.columns:
-            display_cols.append(col)
+    # TTV source info
+    if "ttv_source" in df.columns:
+        sw_n = (df["ttv_source"] == "SW").sum()
+        cr_n = (df["ttv_source"] == "CR").sum()
+        st.caption(f"TTV source: {sw_n} leads from real SW transactions, {cr_n} from CR fallback")
 
-    display_cols = [c for c in display_cols if c in df.columns]
+    # Enrichment report (if scraping data exists)
+    has_scraping_data = "competitors_bnpl" in df.columns and (df["competitors_bnpl"].astype(str).str.strip() != "").any()
+    if has_scraping_data:
+        with st.expander("📡 Enrichment Performance Report", expanded=False):
+            show_scraping_report(df)
 
-    with tab_full:
-        render_kpi_cards(df)
-        st.markdown("")
-        st.dataframe(
-            df[display_cols],
-            width='stretch',
-            height=500,
-            column_config={
-                "Sales_Priority_Score": st.column_config.ProgressColumn(
-                    "Priority Score",
-                    min_value=0,
-                    max_value=100,
-                    format="%.1f",
-                ),
-                "est_ttv_annual_eur": st.column_config.NumberColumn(
-                    "Est. TTV (Annual €)",
-                    format="€%d",
-                ),
-                "est_mr_annual_eur": st.column_config.NumberColumn(
-                    "Est. MR (Annual €)",
-                    format="€%d",
-                ),
-                "monthly_traffic": st.column_config.NumberColumn(
-                    "Monthly Traffic",
-                    format="%d",
-                ),
-            },
-        )
+    # Approachability breakdown (if CRM data exists)
+    if "lead_warmth" in df.columns:
+        warmth_counts = df["lead_warmth"].value_counts()
+        if len(warmth_counts) > 1 or (len(warmth_counts) == 1 and warmth_counts.index[0] != "Net New"):
+            with st.expander("🔗 CRM Approachability Breakdown", expanded=False):
+                for status in ["Net New", "Lost >6 months", "Stale Deal", "In HubSpot (unknown)", "Lost <6 months", "Warm (active)", "Existing Won"]:
+                    n = warmth_counts.get(status, 0)
+                    if n > 0:
+                        pct = n / len(df) * 100
+                        st.caption(f"**{status}**: {n} ({pct:.1f}%)")
 
-    with tab_gold:
+    st.markdown("")
+
+    # Display columns
+    dcols = ["domain", "country", "tier", "scalapay_category", "account_segment",
+             "Sales_Priority_Score", "lead_warmth", "est_ttv_annual_eur", "est_mr_annual_eur"]
+    extras = ["est_monthly_txns", "aov_used", "bnpl_pen_used", "ttv_source",
+              "industry", "monthly_traffic", "yoy_growth", "mom_growth", "email",
+              "competitors_bnpl", "psp_detected", "has_meta_pixel", "has_google_ads",
+              "hs_deal_stage", "hs_deal_owner", "hs_cross_country", "hs_it_deal_found",
+              "in_hubspot_sw", "opportunity_level", "competitors_list", "is_actionable", "growth_score",
+              "hq_country", "top_country"]
+    for c in extras:
+        if c in df.columns:
+            dcols.append(c)
+    dcols = [c for c in dcols if c in df.columns]
+
+    col_config = {
+        "Sales_Priority_Score": st.column_config.ProgressColumn("Score", min_value=0, max_value=100, format="%.1f"),
+        "est_ttv_annual_eur": st.column_config.NumberColumn("TTV Annual €", format="€%d"),
+        "est_mr_annual_eur": st.column_config.NumberColumn("MR Annual €", format="€%d"),
+        "monthly_traffic": st.column_config.NumberColumn("Traffic", format="%d"),
+    }
+
+    # Tabs
+    tabs = st.tabs(["📋 Full List", "🥇 Gold Tier", "🎯 TOP Opportunity", "🌍 By Country"])
+
+    with tabs[0]:
+        st.dataframe(df[dcols], use_container_width=True, height=500, column_config=col_config)
+    with tabs[1]:
         gold_df = df[df["tier"] == "GOLD"] if "tier" in df.columns else df
-        render_kpi_cards(gold_df)
-        st.markdown("")
-        st.dataframe(gold_df[display_cols], width='stretch', height=400)
-
-    with tab_whitespace:
-        if "is_whitespace" in df.columns:
-            ws_df = df[df["is_whitespace"] == True]
-            if ws_df.empty:
-                st.info("No whitespace opportunities found. Enable competitor detection for whitespace scoring.")
+        st.dataframe(gold_df[dcols], use_container_width=True, height=400, column_config=col_config)
+    with tabs[2]:
+        if "opportunity_level" in df.columns:
+            top_df = df[df["opportunity_level"] == "TOP"]
+            if top_df.empty:
+                st.info("No TOP opportunity leads found.")
             else:
-                render_kpi_cards(ws_df)
-                st.markdown("")
-                st.dataframe(ws_df[display_cols], width='stretch', height=400)
-        else:
-            st.info("Enable competitor detection in the sidebar to see whitespace opportunities.")
+                st.dataframe(top_df[dcols], use_container_width=True, height=400, column_config=col_config)
+    with tabs[3]:
+        for country in sorted(df["country"].unique()):
+            cdf = df[df["country"] == country]
+            st.markdown(f"#### {FLAGS.get(country, '🌍')} {country} — {len(cdf)} leads")
+            st.dataframe(cdf[dcols].head(25), use_container_width=True, height=350, column_config=col_config)
 
-    with tab_country:
-        for country in countries:
-            if "country" in df.columns:
-                cdf = df[df["country"] == country]
-                label = {"IB": "🇪🇸🇵🇹 Iberia (ES + PT)", "FR": "🇫🇷 France", "IT": "🇮🇹 Italy"}.get(country, country)
-                st.markdown(f"#### {label}")
-                render_kpi_cards(cdf)
-                st.markdown("")
-                st.dataframe(cdf[display_cols], width='stretch', height=400)
+    # ── EXPORT ──────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("### 📥 Export")
 
-    # ── EXCEL EXPORT ──
-    st.markdown('<hr style="border:none; border-top:1px solid #2D3139; margin: 28px 0;">', unsafe_allow_html=True)
-
-    def generate_excel(dataframe: pd.DataFrame) -> bytes:
-        output = io.BytesIO()
-
-        priority_cols = [
-            "domain", "country", "tier", "scalapay_category", "segment", "Sales_Priority_Score",
-            "pipeline", "deal_stage", "deal_owner", "is_won", "is_in_pipeline",
-            "lead_warmth", "channel_type",
-            "est_ttv_annual_eur", "est_mr_annual_eur",
-            "industry", "annual_revenue_bucket", "monthly_traffic",
-            "yoy_growth", "mom_growth",
-            "competitors_bnpl", "psp_detected",
-            "is_whitespace", "is_advertising_heavy",
-            "hs_company_name", "hs_cross_country",
-            "email", "hq_country", "top_country",
-        ]
-        ordered = [c for c in priority_cols if c in dataframe.columns]
-        remaining = [c for c in dataframe.columns if c not in ordered]
-        dataframe = dataframe[ordered + remaining]
-
-        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-            dataframe.to_excel(writer, sheet_name="Territory List", index=False)
-            wb = writer.book
-            ws = writer.sheets["Territory List"]
-
-            header_fmt = wb.add_format({
-                "bold": True, "bg_color": "#EA5440", "font_color": "#FFFFFF",
-                "border": 1, "text_wrap": True, "valign": "vcenter",
-                "font_name": "Arial", "font_size": 10,
-            })
-            money_fmt = wb.add_format({"num_format": '#,##0 €', "font_name": "Arial", "font_size": 10})
-            number_fmt = wb.add_format({"num_format": "#,##0", "font_name": "Arial", "font_size": 10})
-            pct_fmt = wb.add_format({"num_format": "0.0%", "font_name": "Arial", "font_size": 10})
-            score_fmt = wb.add_format({"num_format": "0.0", "bold": True, "font_name": "Arial", "font_size": 10})
-            text_fmt = wb.add_format({"font_name": "Arial", "font_size": 10})
-
-            for col_num, col_name in enumerate(dataframe.columns):
-                clean = col_name.replace("_", " ").replace("est ", "Est. ").title()
-                for old, new in [("Ttv","TTV"),("Eur","(EUR)"),("Mr ","MR "),("Bnpl","BNPL"),
-                                 ("Psp","PSP"),("Yoy","YoY"),("Mom","MoM"),("Hs ","HubSpot ")]:
-                    clean = clean.replace(old, new)
-                ws.write(0, col_num, clean, header_fmt)
-
+    def gen_excel(dataframe):
+        out = io.BytesIO()
+        with pd.ExcelWriter(out, engine="xlsxwriter") as w:
+            hdr = w.book.add_format({"bold": True, "bg_color": "#1e1b4b", "font_color": "#e2e8f0", "border": 1, "text_wrap": True})
+            dataframe.to_excel(w, sheet_name="All Leads", index=False)
+            ws = w.sheets["All Leads"]
             for i, col in enumerate(dataframe.columns):
-                max_len = max(dataframe[col].astype(str).str.len().max(), len(col))
-                width = min(max_len + 3, 35)
-                if "ttv" in col or "mr_" in col:
-                    ws.set_column(i, i, 18, money_fmt)
-                elif col in ("monthly_traffic", "total_page_views", "avg_monthly_visits"):
-                    ws.set_column(i, i, 16, number_fmt)
-                elif col in ("yoy_growth", "mom_growth", "bnpl_penetration_pct"):
-                    ws.set_column(i, i, 12, pct_fmt)
-                elif col == "Sales_Priority_Score":
-                    ws.set_column(i, i, 14, score_fmt)
-                else:
-                    ws.set_column(i, i, width, text_fmt)
-
-            ws.freeze_panes(1, 2)
-            ws.autofilter(0, 0, len(dataframe), len(dataframe.columns) - 1)
-
+                ws.write(0, i, col, hdr)
+                ml = max(dataframe[col].astype(str).str.len().max(), len(col))
+                ws.set_column(i, i, min(ml + 2, 30))
             if "Sales_Priority_Score" in dataframe.columns:
                 si = dataframe.columns.get_loc("Sales_Priority_Score")
-                ws.conditional_format(1, si, len(dataframe), si,
-                    {"type": "3_color_scale", "min_color": "#fca5a5",
-                     "mid_color": "#fde68a", "max_color": "#86efac"})
-
+                ws.conditional_format(1, si, len(dataframe), si, {"type": "3_color_scale", "min_color": "#fca5a5", "mid_color": "#fde68a", "max_color": "#86efac"})
+            # Extra sheets
+            iberia = dataframe[dataframe["country"].isin(["ES", "PT"])]
+            france = dataframe[dataframe["country"] == "FR"]
+            italy = dataframe[dataframe["country"].isin(["IT"])]
+            if not iberia.empty: iberia.to_excel(w, sheet_name="Iberia (ES+PT)", index=False)
+            if not france.empty: france.to_excel(w, sheet_name="France", index=False)
+            if not italy.empty: italy.to_excel(w, sheet_name="Italy+Portugal", index=False)
+            for seg in ["Strategic", "Enterprise"]:
+                sd = dataframe[dataframe["account_segment"] == seg]
+                if not sd.empty: sd.to_excel(w, sheet_name=seg, index=False)
             if "tier" in dataframe.columns:
-                ti = dataframe.columns.get_loc("tier")
-                for val, bg, fg in [("GOLD","#fef3c7","#92400e"),("SILVER","#e2e8f0","#334155"),("BRONZE","#fed7aa","#9a3412")]:
-                    fmt = wb.add_format({"bg_color": bg, "font_color": fg, "font_name": "Arial", "font_size": 10})
-                    ws.conditional_format(1, ti, len(dataframe), ti,
-                        {"type": "text", "criteria": "containing", "value": val, "format": fmt})
+                dataframe[dataframe["tier"] == "GOLD"].to_excel(w, sheet_name="Gold Tier", index=False)
+            if "opportunity_level" in dataframe.columns:
+                top = dataframe[dataframe["opportunity_level"] == "TOP"]
+                if not top.empty: top.to_excel(w, sheet_name="TOP Opportunity", index=False)
+        out.seek(0)
+        return out.getvalue()
 
-            def write_sub(data, name):
-                data.to_excel(writer, sheet_name=name, index=False)
-                sws = writer.sheets[name]
-                for cn, cname in enumerate(data.columns):
-                    sws.write(0, cn, cname.replace("_", " ").title(), header_fmt)
-                sws.freeze_panes(1, 2)
-                sws.autofilter(0, 0, len(data), len(data.columns) - 1)
+    ts = datetime.now().strftime("%Y%m%d_%H%M")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.download_button("⬇️ Download Excel Report", gen_excel(df),
+                           f"scalapay_territory_{ts}.xlsx",
+                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                           type="primary", use_container_width=True)
+    with c2:
+        st.download_button("⬇️ Download CSV", df.to_csv(index=False).encode(),
+                           f"scalapay_territory_{ts}.csv", "text/csv", use_container_width=True)
 
-            if "tier" in dataframe.columns:
-                write_sub(dataframe[dataframe["tier"] == "GOLD"], "Gold Tier")
-
-            if "is_whitespace" in dataframe.columns:
-                wsd = dataframe[dataframe["is_whitespace"] == True]
-                if not wsd.empty:
-                    write_sub(wsd, "Whitespace")
-
-            if "country" in dataframe.columns:
-                for c in dataframe["country"].unique():
-                    label = {"IB": "Iberia", "FR": "FR", "IT": "IT"}.get(c, c)
-                    write_sub(dataframe[dataframe["country"] == c], f"Territory {label}"[:31])
-
-        output.seek(0)
-        return output.getvalue()
-
-    col_dl1, col_dl2 = st.columns(2)
-    with col_dl1:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-        excel_bytes = generate_excel(df)
-        st.download_button(
-            label="Download Excel Report",
-            data=excel_bytes,
-            file_name=f"scalapay_territory_list_{timestamp}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary",
-            width='stretch',
-        )
-    with col_dl2:
-        csv_bytes = df.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            label="Download CSV",
-            data=csv_bytes,
-            file_name=f"scalapay_territory_list_{timestamp}.csv",
-            mime="text/csv",
-            width='stretch',
-        )
-
-    # ── Score Breakdown
-    with st.expander("Score Breakdown & Methodology"):
+    # Methodology
+    with st.expander("🔬 Score Breakdown & Methodology"):
         st.markdown("""
-        **Sales Priority Score** is a composite 0–100 score built from five weighted components:
+        **Sales_Priority_Score** (0–100) = weighted composite:
 
-        | Component | Max pts | What it measures |
+        | Component | Default | What it measures |
         |-----------|---------|------------------|
-        | **Industry Tier** | 25 | BNPL conversion fit by vertical and country. Gold = highest margin. |
-        | **Penetration / TTV** | 20 | Revenue potential: BNPL penetration × estimated transaction value. |
-        | **Traffic Growth** | 20 | YoY (60%) + MoM (40%) momentum. Proxy for merchant ad investment. |
-        | **Lead Warmth** | 15 | CRM status from HubSpot: Active Pipeline → Net New → Lost. |
-        | **Whitespace** | 20 | No BNPL competitor detected = greenfield opportunity. |
+        | **Tier** | 25% | Country-specific (IT/FR/IB matrix). Travel: 14 risk sub-categories |
+        | **Account Size** | 20% | TTV-based: Strategic >€5M, Enterprise €500K–5M, Executive <€500K |
+        | **Penetration/TTV** | 15% | BNPL adoption × estimated MR |
+        | **Growth** | 15% | YoY (60%) + MoM (40%) traffic momentum |
+        | **Warmth** | 10% | HubSpot deal stage |
+        | **Competitor** | 10% | BNPL competitors on site |
+        | **Market Opportunity** | 15% | BNPL checkout competition (TOP/MEDIUM-HIGH/MEDIUM/LOW) |
 
-        Weights are adjustable in the sidebar. Formula: (raw points / 95) × 100.
+        **TTV Formula:**
+        `Monthly Transactions (real from SW) × AOV (per category) × BNPL Penetration (per category × country) × 12`
+
+        When SW transactions unavailable: `Traffic × CR (median per category) × AOV × Pen × 12`
+
+        **Country tiering:** PT uses IT tiers. ES uses IB tiers.
+        **Travel sub-categories:** OTA/Hotel = BRONZE (high default risk), Tour Operator = SILVER, Theme Parks/Ticketing/Wellness = GOLD (low risk).
         """)
 
 else:
-    # Landing state
+    st.markdown("---")
     st.markdown("""
-    <div class="landing-container">
-        <div class="landing-icon">🎯</div>
-        <p class="landing-title">Upload Similarweb data & hit Generate</p>
-        <p class="landing-desc">
-            Configure integrations and scoring weights in the sidebar,
-            or check "Use sample data" for a quick demo.
-        </p>
+    <div style="text-align:center;padding:60px 20px;color:#64748b;">
+        <p style="font-size:3rem;margin-bottom:8px;">🎯</p>
+        <p style="font-size:1.2rem;font-weight:600;color:#cbd5e1;">Upload Similarweb data & hit Generate</p>
+        <p style="font-size:0.9rem;">IT, FR, IB (ES) supported · Upload XLSX or CSV · Country-specific tiering</p>
     </div>
     """, unsafe_allow_html=True)
 
-# ── Footer ──
-st.markdown("""
-<div class="te-footer">
-    <div class="te-footer-left">Territory Engine v2.0 — RevOps & Strategy</div>
-    <div class="te-footer-logo">
-        Built with <span class="scalapay-heart">♥</span> <strong>scalapay</strong>
-    </div>
-</div>
-""", unsafe_allow_html=True)
+st.markdown("---")
+# ── LOG VIEWER ─────────────────────────────────────────────
+hs_key = os.getenv("HUBSPOT_API_KEY", "")
+hs_status = "🟢 Connected" if hs_key and len(hs_key) > 10 else "🔴 Not configured (.env missing)"
+st.caption(f"Scalapay Territory Engine v4.0 — Strategy & RevOps · IT/FR/IB &nbsp;|&nbsp; HubSpot: {hs_status}")
+
+if "log_messages" in st.session_state and st.session_state.log_messages:
+    with st.expander(f"📋 Pipeline Logs ({len(st.session_state.log_messages)} entries)", expanded=False):
+        c1, c2 = st.columns([4, 1])
+        with c2:
+            if st.button("🗑️ Clear logs", key="clear_logs"):
+                st.session_state.log_messages = []
+                st.rerun()
+        log_text = "\n".join(st.session_state.log_messages[-200:])  # Last 200 entries
+        st.code(log_text, language=None)

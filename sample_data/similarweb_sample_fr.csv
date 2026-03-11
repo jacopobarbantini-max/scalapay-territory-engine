@@ -1,21 +1,26 @@
-Domain,In HubSpot,Is new,Annual Revenue,Employees,Top country,Industry,Monthly visits,YoY traffic change,MoM traffic change,Total page views,Monthly transactions,HQ country,Email address,Average monthly visits
-zalando.fr,No,Yes,> 1B,> 10000,France,Apparel & Fashion/Clothing,28000000,0.065,0.018,112000000,> 1M,Germany,info@zalando.fr,27500000
-veepee.fr,Yes,No,> 1B,5000 - 10000,France,Marketplace,22000000,0.040,0.005,88000000,500K - 1M,France,contact@veepee.fr,21800000
-sephora.fr,Yes,No,> 1B,> 10000,France,Beauty & Cosmetics,12000000,0.090,0.025,48000000,500K - 1M,France,info@sephora.fr,11800000
-decathlon.fr,No,No,> 1B,> 10000,France,Sports & Outdoors/Sportswear,35000000,0.072,0.015,140000000,> 1M,France,info@decathlon.fr,34500000
-leroymerlin.fr,No,No,> 1B,> 10000,France,Home & Garden/Furniture,25000000,0.055,0.010,100000000,500K - 1M,France,info@leroymerlin.fr,24500000
-doctipharma.fr,No,Yes,10M - 25M,50 - 200,France,Health & Wellness/Supplements,3500000,0.280,0.065,14000000,50K - 100K,France,info@doctipharma.fr,3400000
-mypharmworld.com,No,Yes,5M - 10M,10 - 50,France,Health & Wellness/Supplements,1200000,0.320,0.070,4800000,10K - 50K,France,info@mypharmworld.com,1150000
-babymoov.com,No,Yes,10M - 25M,50 - 200,France,Toys & Baby/Baby Products,800000,0.200,0.045,3200000,10K - 50K,France,info@babymoov.com,780000
-animalis.com,No,No,50M - 100M,1000 - 5000,France,Pets/Pet Food,2800000,0.180,0.038,11200000,50K - 100K,France,info@animalis.com,2700000
-wanimo.com,No,Yes,10M - 25M,50 - 200,France,Pets/Pet Food,1500000,0.220,0.050,6000000,10K - 50K,France,info@wanimo.com,1450000
-backmarket.fr,No,Yes,200M - 500M,1000 - 5000,France,Consumer Electronics,18000000,0.150,0.035,72000000,500K - 1M,France,info@backmarket.fr,17500000
-boulanger.com,Yes,No,> 1B,5000 - 10000,France,Consumer Electronics,14000000,0.045,0.008,56000000,500K - 1M,France,info@boulanger.com,13800000
-maje.com,No,Yes,100M - 200M,1000 - 5000,France,Apparel & Fashion/Clothing,4200000,0.110,0.028,16800000,50K - 100K,France,info@maje.com,4100000
-sandro-paris.com,No,Yes,100M - 200M,1000 - 5000,France,Apparel & Fashion/Clothing,3800000,0.095,0.020,15200000,50K - 100K,France,info@sandro-paris.com,3700000
-nuxe.com,No,Yes,50M - 100M,500 - 1000,France,Beauty & Cosmetics/Skincare,2200000,0.160,0.035,8800000,10K - 50K,France,info@nuxe.com,2100000
-gymlib.com,No,Yes,5M - 10M,50 - 200,France,Health & Wellness/Fitness,950000,0.350,0.080,3800000,10K - 50K,France,info@gymlib.com,920000
-wedressfair.fr,No,Yes,1M - 5M,10 - 50,France,Apparel & Fashion/Clothing,620000,0.450,0.100,2480000,< 10K,France,info@wedressfair.fr,600000
-la-redoute.fr,Yes,No,500M - 1B,5000 - 10000,France,Marketplace,20000000,0.030,0.005,80000000,500K - 1M,France,info@la-redoute.fr,19800000
-alltricks.fr,No,Yes,25M - 50M,50 - 200,France,Sports & Outdoors/Equipment,5500000,0.120,0.025,22000000,50K - 100K,France,info@alltricks.fr,5300000
-printemps.com,No,No,500M - 1B,5000 - 10000,France,Apparel & Fashion/Luxury,8500000,0.080,0.015,34000000,100K - 500K,France,info@printemps.com,8300000
+Domain,Get data from,In HubSpot,Is new,Annual Revenue,Employees,Top country,Industry,Monthly visits,YoY traffic change,Total page views,Monthly transactions,HQ country,Email address,Average monthly visits,MoM traffic change
+amazon.fr,Worldwide,Yes,,> 1B,"> 10,000",France,Retailers & General Merchandise/Shopping Portals & Search Engines,205415188,0.0648,1653084307,100K+,United States,,198985529,-0.1449
+laposte.fr,Worldwide,Yes,,> 1B,"> 10,000",France,Business & Industrial/Shipping & Packing,44824067,0.1859,166344726,100K+,France,internet.laposte@laposte.fr,38939489,-0.134
+vinted.fr,Worldwide,,,200M - 500M,"1,000 - 5,000",France,Apparel/Clothing,37010335,0.1738,477520861,100K+,United States,opportunities@vinted.com,33344651,-0.0529
+cdiscount.com,Worldwide,Yes,,> 1B,"1,000 - 5,000",France,Retailers & General Merchandise/Marketplace,33429711,0.1326,162427219,100K+,France,,29402799,-0.08
+leroymerlin.fr,Worldwide,Yes,,> 1B,"> 10,000",France,Business & Industrial/Building Construction & Maintenance,31930701,0.0366,187438184,100K+,France,,30775644,0.2086
+fnac.com,Worldwide,Yes,,> 1B,"> 10,000",France,Arts & Entertainment/Entertainment Media Retailers,27417020,-0.0588,121758729,100K+,France,,25516856,-0.2399
+carrefour.fr,Worldwide,Yes,,500M - 1B,"> 10,000",France,Retailers & General Merchandise/Marketplace,25295346,0.1915,168299785,100K+,Brazil,,22201941,-0.0915
+decathlon.fr,Worldwide,Yes,,2M - 5M,10 - 50,France,Sports & Fitness/Sporting Goods,22967272,0.0932,111965074,100K+,Poland,,22650060,-0.0215
+ebay.fr,Worldwide,,,> 1B,"> 10,000",France,Retailers & General Merchandise/Shopping Portals & Search Engines,22579734,-0.1745,138180118,100K+,United States,customerhelp@ebay.com,23145840,-0.0491
+dealabs.com,Worldwide,,,,10 - 50,France,Retailers & General Merchandise/Coupons & Rebates,21664589,-0.0282,78415823,100K+,France,contact@dealabs.com,21026853,-0.1275
+zalando.fr,Worldwide,,,> 1B,0 - 10,France,Apparel/Footwear,18536462,-0.0457,134428575,100K+,Germany,,16581650,-0.0486
+instant-gaming.com,Worldwide,Yes,,2M - 5M,10 - 50,France,Computers & Consumer Electronics/Software,17216717,0.2229,97392542,100K+,China,support@instant-gaming.com,16514308,-0.1251
+bouyguestelecom.fr,Worldwide,Yes,,> 1B,"> 10,000",France,Internet & Telecom/Internet Service Plans,16977553,-0.0454,93696556,100K+,France,alberry@bouyguestelecom.fr,16210538,-0.086
+boulanger.com,Worldwide,Yes,,> 1B,"5,000 - 10,000",France,Home & Garden/Home Appliances,15676952,0.0593,59926771,100K+,France,,12839789,-0.0751
+e.leclerc,Worldwide,,,> 1B,"> 10,000",France,Food & Groceries/Online Grocery Shopping & Grocery Delivery,15200386,0.2494,46337234,100K+,France,,13573500,-0.268
+darty.com,Worldwide,Yes,,100M - 200M,"> 10,000",France,Business & Industrial/Food Service Industry,15046645,-0.0675,72996904,100K+,France,,12824905,0.0306
+maisonsdumonde.com,Worldwide,Yes,,> 1B,"5,000 - 10,000",France,Home & Garden/Home Furniture,14112616,-0.0096,75642685,100K+,France,,11146670,0.2333
+vintedgo.com,Worldwide,,,200M - 500M,"1,000 - 5,000",France,Apparel/Clothing,13862934,2.1625,26637852,100K+,United States,opportunities@vinted.com,8906983,-0.165
+galerieslafayette.com,Worldwide,Yes,,> 1B,"> 10,000",France,Apparel/Clothing,12715809,0.9487,52377414,100K+,France,contact_internet@galerieslafayette.com,7251132,0.0788
+but.fr,Worldwide,Yes,,> 1B,"5,000 - 10,000",France,Home & Garden/Home Furniture,11326444,0.1015,54496447,10K - 100K,France,,7370388,0.2812
+veepee.fr,Worldwide,,,> 1B,"5,000 - 10,000",France,Retailers & General Merchandise/Wholesalers & Liquidators,11086185,-0.1165,86622180,100K+,France,,10898591,-0.0322
+lidl.fr,Worldwide,,,> 1B,"> 10,000",France,Food & Groceries/Food,10944547,-0.3691,122604590,100K+,United States,,12882432,0.1024
+conforama.fr,Worldwide,Yes,,> 1B,"5,000 - 10,000",France,Home & Garden/Home Furniture,10838649,0.2607,52011159,10K - 100K,France,,6808288,0.2974
+auchan.fr,Worldwide,Yes,,> 1B,"> 10,000",France,Food & Groceries/Food,9764219,0.1324,68486010,100K+,France,,7672540,-0.1033
+lacoste.com,Worldwide,Yes,Yes,> 1B,"> 10,000",France,Apparel/Clothing,9106811,0.1789,42681321,10K - 100K,France,customerservice-us@lacoste.com,7298935,-0.0733

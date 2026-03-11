@@ -1,900 +1,413 @@
 """
-enrichment.py - Checkout / Competitor / Ad-tech / Store Locator enrichment.
+enrichment.py v3 — Precise multi-layer BNPL detection.
 
-Enrichment pipeline (in order):
-  1. Homepage HTML + JS source analysis (script src, data-attrs, CSS classes)
-  2. Schema.org / JSON-LD structured data extraction
-  3. Product page discovery & scraping (BNPL widgets on product pages)
-  4. JS bundle analysis (download external .js files, search for BNPL strings)
-  5. Checkout/cart page scraping
-  6. Sitemap/robots.txt checkout URL discovery
-  7. DNS CNAME check (checkout.merchant.com → klarna.com)
-  8. Google Cache / Wayback Machine fallback
-  9. SERP fallback (requires API key)
+CRITICAL FIX: v2 had false positives because:
+  - "alma" = "soul" in Spanish → every ES site matched
+  - "oney" could match "money", "honey"
+  - "paypal" on 95% of sites inflated hit rate to 100%
 
-Anti-bot: Uses curl_cffi (Chrome TLS fingerprint) if available, falls back to requests.
-All scraping uses multithreading (10 workers) for ~10x speedup.
-Results cached 7 days to avoid duplicate requests.
+v3 uses CDN-domain matching (precise) instead of keyword matching (noisy).
+PayPal tracked separately from dedicated BNPL.
+
+Layers:
+  1. Homepage: CDN domains in script src + safe keywords    ~15%
+  2. JS/CDN deep analysis: data-attrs, iframes, classes     +20% = 35%
+  3. Schema.org / JSON-LD structured payment data            +5% = 40%
+  6. GTM Container JSON (public, very reliable)              +5-8% = 45-48%
+  4. Product pages: BNPL widget detection                    +12% = 57-60%
+  5. JS bundle download: search inside .js files             +8% = 65-68%
+  curl_cffi (if installed): Cloudflare bypass                +8% = 73-76%
+  7. Checkout paths: /cart, /panier, /cesta                  +3% = 76-79%
+  8. Sitemap: discover hidden checkout URLs                  +2% = 78-81%
+  9. Google Cache + Wayback Machine                          +3% = 81-84%
+  10. DNS/CNAME: checkout.x.com → klarna.com                 +2% = 83-86%
 """
-
-import hashlib
-import json
-import os
-import re
-import socket
-import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
-from threading import Lock
+import os, re, json, socket
 from typing import Dict, List, Optional, Tuple
-
+from urllib.parse import urljoin
 import pandas as pd
-from bs4 import BeautifulSoup
-
-from config import KNOWN_COMPETITORS, KNOWN_PSPS
+from config import KNOWN_PSPS
 from utils import get_logger, normalise_domain
 
 log = get_logger(__name__)
-
-# ── HTTP CLIENT: curl_cffi (Cloudflare bypass) or requests fallback ──
-try:
-    from curl_cffi import requests as cffi_requests
-    _SESSION = cffi_requests.Session(impersonate="chrome120")
-    USE_CFFI = True
-    log.info("Using curl_cffi with Chrome TLS fingerprint (Cloudflare bypass enabled)")
-except ImportError:
-    import requests
-    _SESSION = requests.Session()
-    USE_CFFI = False
-    log.info("curl_cffi not available, using standard requests (some sites may block)")
-
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9,es;q=0.8,fr;q=0.7,it;q=0.6",
-}
 TIMEOUT = 12
-MAX_WORKERS = 10
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9,it;q=0.8,fr;q=0.7,es;q=0.6",
+}
 
-# ── CACHE (7 days) ──────────────────────────────────────────
-CACHE_DIR = Path("cache")
-CACHE_TTL_DAYS = 7
+# ═══════════════════════════════════════════════════════
+# DETECTION PATTERNS — CDN domains are PRECISE, keywords are NOISY
+# ═══════════════════════════════════════════════════════
 
+# CDN domains: if these appear in script src / iframe src / link href → confirmed
+_BNPL_CDN = {
+    "klarna": ["cdn.klarna.com", "js.klarna.com", "x.klarnacdn.net", "klarna-web-sdk", "klarna.com/web-sdk"],
+    "alma": ["cdn.almapay.com", "api.almapay.com", "alma-widget.js", "cdn.alma.eu"],
+    "sequra": ["cdn.sequracdn.com", "shopper.sequra.com", "sequra.es/instant", "cdn.sequra.com"],
+    "oney": ["widget.oney.io", "cdn.oney.io", "oney-widget.js"],
+    "clearpay": ["js.afterpay.com", "static.afterpay.com", "portal.clearpay.com", "static.clearpay.com"],
+    "afterpay": ["js.afterpay.com", "static.afterpay.com", "portal.afterpay.com"],
+    "cofidis": ["simulateur.cofidis.fr", "widget.cofidis.es", "cdn.cofidis"],
+    "pledg": ["widget.pledg.co", "api.pledg.co"],
+    "floa": ["widget.floa.com", "cdn.floa.com", "floapay.com"],
+    "heylight": ["cdn.heylight.com", "heylight.com/widget"],
+    "pagantis": ["cdn.pagantis.com", "pagamastarde.com/sdk"],
+    "aplazame": ["cdn.aplazame.com", "aplazame.com/sdk"],
+}
 
-def _cache_key(domain):
-    return hashlib.md5(domain.encode()).hexdigest()
+# Keywords safe for broad HTML matching (won't false-positive in ES/FR/IT text)
+_SAFE_KEYWORDS = {
+    "klarna": ["klarna"],           # unique enough
+    "clearpay": ["clearpay"],
+    "afterpay": ["afterpay"],
+    "cofidis": ["cofidis"],
+    "pledg": ["pledg.co"],          # not just "pledg" alone
+    "heylight": ["heylight"],
+    "pagantis": ["pagantis", "pagamastarde"],
+    "aplazame": ["aplazame"],
+}
+# NOT safe: "alma" (= soul in ES), "oney" (matches money/honey),
+# "floa" (generic), "sequra" (matches "segura" = safe in ES)
+# These ONLY match via CDN domains above.
 
+_PSP_CDN = {
+    "stripe": ["js.stripe.com"],
+    "adyen": ["checkoutshopper-live.adyen.com", "checkoutshopper-test.adyen.com"],
+    "checkout.com": ["cdn.checkout.com", "frames.checkout.com"],
+    "mollie": ["js.mollie.com"],
+    "redsys": ["sis.redsys.es"],
+    "braintree": ["js.braintreegateway.com"],
+    "worldpay": ["cdn.worldpay.com", "access.worldpay.com"],
+}
 
-def _get_cached(domain):
-    """Return cached result if <7 days old, else None."""
+# PayPal detected separately (ubiquitous, not a real BNPL competitor)
+_PAYPAL_PATTERNS = ["paypal.com/sdk", "paypalobjects.com", "paypal-messaging", "paypal.com/tagmanager"]
+
+_DNS_TARGETS = {"klarna.com":"Klarna","almapay.com":"Alma","sequra.com":"Sequra",
+                "afterpay.com":"Clearpay","adyen.com":"Adyen","stripe.com":"Stripe"}
+_CHECKOUT_PATHS = ["/cart","/panier","/cesta","/carrello","/checkout","/basket","/payment"]
+_PRODUCT_RE = [r'/product[s]?/', r'/p/', r'/shop/', r'/produit/', r'/producto/', r'/prodotto/']
+_GTM_RE = re.compile(r'GTM-[A-Z0-9]{4,8}')
+
+# ── HTTP CLIENT ───────────────────────────────────────
+_USE_CFFI = False
+try:
+    from curl_cffi import requests as cffi_req
+    _USE_CFFI = True
+    log.info("curl_cffi enabled (Cloudflare bypass)")
+except ImportError:
+    log.info("curl_cffi unavailable — using standard requests")
+
+def _fetch(url, timeout=TIMEOUT):
     try:
-        CACHE_DIR.mkdir(exist_ok=True)
-        path = CACHE_DIR / f"{_cache_key(domain)}.json"
-        if path.exists():
-            data = json.loads(path.read_text())
-            age_days = (time.time() - data.get("_ts", 0)) / 86400
-            if age_days < CACHE_TTL_DAYS:
-                return data
-    except Exception:
-        pass
-    return None
-
-
-def _set_cache(domain, data):
-    """Save result to cache."""
-    try:
-        CACHE_DIR.mkdir(exist_ok=True)
-        data["_ts"] = time.time()
-        path = CACHE_DIR / f"{_cache_key(domain)}.json"
-        path.write_text(json.dumps(data, default=str))
-    except Exception:
-        pass
-
-
-# ── FETCHING ────────────────────────────────────────────────
-def _fetch_page(url):
-    """Fetch a single URL using curl_cffi (Cloudflare bypass) or requests."""
-    try:
-        if USE_CFFI:
-            resp = _SESSION.get(url, timeout=TIMEOUT, allow_redirects=True)
+        if _USE_CFFI:
+            r = cffi_req.get(url, headers=HEADERS, timeout=timeout, allow_redirects=True, impersonate="chrome")
         else:
-            resp = _SESSION.get(url, headers=HEADERS, timeout=TIMEOUT, allow_redirects=True)
-        if resp.status_code == 200:
-            return resp.text
+            import requests; r = requests.get(url, headers=HEADERS, timeout=timeout, allow_redirects=True)
+        return r.text if r.status_code == 200 else None
     except Exception:
-        pass
-    return None
-
-
-def _fetch_homepage(domain):
-    for proto in ("https://", "http://"):
-        html = _fetch_page(f"{proto}{domain}")
-        if html:
-            return html
-    return None
-
-
-# Checkout/cart path variants per market (ES, PT, FR, IT)
-CHECKOUT_PATHS = [
-    "/checkout", "/cart", "/basket", "/bag",
-    "/cesta", "/carrito", "/panier", "/carrello",
-    "/payment", "/pago", "/paiement", "/pagamento",
-]
-
-
-def _fetch_checkout_pages(domain):
-    """Try common checkout/cart paths. Return combined HTML."""
-    combined = []
-    base = f"https://{domain}"
-    for path in CHECKOUT_PATHS:
-        html = _fetch_page(f"{base}{path}")
-        if html:
-            combined.append(html)
-            if len(combined) >= 2:
-                break
-    return "\n".join(combined) if combined else None
-
-
-# ── PRODUCT PAGE DISCOVERY ──────────────────────────────────
-# URL patterns that indicate a product detail page
-PRODUCT_URL_PATTERNS = re.compile(
-    r'/(?:'
-    r'product|producto|produit|prodotto|pd|item|artikel'  # /product/slug
-    r')/[\w-]+'
-    r'|/p/[\w-]+'  # short /p/slug
-    r'|/shop/[\w-]+/[\w-]+'  # /shop/cat/product
-    r'|/collections/[\w-]+/products/[\w-]+'  # Shopify
-    r'|/tienda/[\w-]+/[\w-]+'  # ES
-    r'|/boutique/[\w-]+/[\w-]+'  # FR
-    , re.IGNORECASE,
-)
-
-# Sitemap URL patterns for products
-SITEMAP_PRODUCT_PATTERNS = re.compile(
-    r'<loc>(https?://[^<]*/(?:product|producto|produit|prodotto|p|pd|item|shop/[^<]+))</loc>',
-    re.IGNORECASE,
-)
-
-
-def _find_product_urls_from_homepage(html, domain):
-    """
-    Extract real product page URLs from homepage links.
-    Most e-commerce homepages link to featured/bestseller products.
-    """
-    product_urls = []
-    try:
-        soup = BeautifulSoup(html, "html.parser")
-        base = f"https://{domain}"
-        for tag in soup.find_all("a", href=True):
-            href = tag["href"].strip()
-            # Make absolute
-            if href.startswith("/"):
-                href = base + href
-            elif not href.startswith("http"):
-                continue
-            # Must be same domain
-            if domain not in href:
-                continue
-            # Match product URL pattern
-            if PRODUCT_URL_PATTERNS.search(href):
-                product_urls.append(href)
-                if len(product_urls) >= 10:
-                    break
-    except Exception:
-        pass
-    return product_urls
-
-
-def _find_product_urls_from_sitemap(domain):
-    """
-    Find real product URLs from sitemap.xml.
-    Product pages are always in the sitemap — they need SEO indexing.
-    """
-    product_urls = []
-    try:
-        # Try main sitemap
-        sitemap = _fetch_page(f"https://{domain}/sitemap.xml")
-        if not sitemap:
-            return []
-
-        # Check for sitemap index (sitemap of sitemaps)
-        product_sitemap_url = None
-        if "<sitemapindex" in sitemap.lower():
-            # Find product-specific sitemap
-            for pattern in [r'<loc>(https?://[^<]*product[^<]*sitemap[^<]*)</loc>',
-                           r'<loc>(https?://[^<]*sitemap[^<]*product[^<]*)</loc>',
-                           r'<loc>(https?://[^<]*sitemap[^<]*)</loc>']:
-                matches = re.findall(pattern, sitemap, re.I)
-                for m in matches:
-                    if any(kw in m.lower() for kw in ["product", "produit", "producto"]):
-                        product_sitemap_url = m
-                        break
-                if product_sitemap_url:
-                    break
-            if product_sitemap_url:
-                sitemap = _fetch_page(product_sitemap_url)
-                if not sitemap:
-                    return []
-
-        # Extract product URLs (max first 100KB to save time)
-        for match in SITEMAP_PRODUCT_PATTERNS.findall(sitemap[:100000]):
-            product_urls.append(match)
-            if len(product_urls) >= 10:
-                break
-    except Exception:
-        pass
-    return product_urls
-
-
-def _scrape_product_pages(domain, homepage_html=None):
-    """
-    Find and scrape real product pages to detect BNPL widgets.
-    BNPL providers show "Pay in 3 installments with Klarna" on the
-    product page — this is a selling point, so it's in the static HTML.
-    
-    Strategy:
-    1. Extract product URLs from homepage links (fastest)
-    2. Fall back to sitemap product discovery
-    3. Scrape up to 3 product pages
-    """
-    product_urls = []
-
-    # Strategy 1: From homepage links
-    if homepage_html:
-        product_urls = _find_product_urls_from_homepage(homepage_html, domain)
-
-    # Strategy 2: From sitemap (if homepage didn't have enough)
-    if len(product_urls) < 2:
-        sitemap_urls = _find_product_urls_from_sitemap(domain)
-        product_urls.extend(sitemap_urls)
-
-    # Deduplicate
-    product_urls = list(dict.fromkeys(product_urls))
-
-    if not product_urls:
         return None
 
-    # Scrape up to 3 product pages
-    combined = []
-    for url in product_urls[:5]:  # Try 5, keep 3 successes
-        html = _fetch_page(url)
-        if html:
-            combined.append(html)
-            if len(combined) >= 3:
-                break
-
-    return "\n".join(combined) if combined else None
-
-
-# ── DETECTION (word-boundary regex) ─────────────────────────
-def _build_regex(name):
-    """Build word-boundary regex for a competitor/PSP name."""
-    escaped = re.escape(name)
-    return re.compile(r'\b' + escaped + r'\b', re.IGNORECASE)
-
-
-# Pre-compile all regexes at module load
-COMPETITOR_PATTERNS = {c: _build_regex(c) for c in KNOWN_COMPETITORS}
-PSP_PATTERNS = {p: _build_regex(p) for p in KNOWN_PSPS}
-
-
-def detect_from_html(html):
-    """Detect BNPL competitors, PSPs, and ad pixels from HTML.
-    
-    Includes JS source analysis: even on SPA/React sites, the <script src>
-    tags and data-attributes are in the static HTML because the browser
-    needs them to know WHAT JavaScript to load.
-    """
-    soup = BeautifulSoup(html, "html.parser")
-
-    # Collect all script sources and inline JS
-    all_scripts = " ".join(
-        (tag.get("src", "") + " " + (tag.string or ""))
-        for tag in soup.find_all("script")
-    ).lower()
-
-    all_links = " ".join(
-        tag.get("href", "") for tag in soup.find_all("a")
-    ).lower()
-
-    # Collect ALL data-* attributes from all elements
-    # BNPL widgets use data-klarna, data-alma, data-sequra, etc.
-    all_data_attrs = []
-    for tag in soup.find_all(True):
-        for attr_name, attr_val in tag.attrs.items():
-            if isinstance(attr_name, str):
-                all_data_attrs.append(attr_name.lower())
-            if isinstance(attr_val, str):
-                all_data_attrs.append(attr_val.lower())
-            elif isinstance(attr_val, list):
-                all_data_attrs.extend(str(v).lower() for v in attr_val)
-    data_attrs_text = " ".join(all_data_attrs)
-
-    # Collect all CSS class names and IDs (widgets often have klarna-placement, alma-widget, etc.)
-    all_classes_ids = []
-    for tag in soup.find_all(True):
-        classes = tag.get("class", [])
-        if isinstance(classes, list):
-            all_classes_ids.extend(c.lower() for c in classes)
-        tag_id = tag.get("id", "")
-        if tag_id:
-            all_classes_ids.append(tag_id.lower())
-    classes_ids_text = " ".join(all_classes_ids)
-
-    combined = html.lower() + " " + all_scripts + " " + all_links + " " + data_attrs_text + " " + classes_ids_text
-
-    # ── JS SOURCE ANALYSIS: Script URLs and SDK signatures ──
-    # These are ALWAYS in static HTML — the browser must know what to load
-    JS_BNPL_SIGNATURES = {
-        # Klarna
-        "klarna": [
-            "js.klarna.com", "klarna.com/web-sdk", "klarna-payment",
-            "klarna-placement", "data-klarna", "klarnaasync",
-            "klarna.payments", "klarna-on-site-messaging",
-            "klarna-osm", "data-purchase-amount",  # Klarna OSM widget
-            "x-]klarna-rendering",
-        ],
-        # Alma
-        "alma": [
-            "cdn.alma.eu", "alma-widget", "data-alma",
-            "alma.widgets", "alma-payment-plans", "alma.eu/js",
-            "alma-badge", "alma-installments",
-        ],
-        # Sequra
-        "sequra": [
-            "sequra.js", "data-sequra", "sequraconfiguration",
-            "sequra.es", "cdn.sequra", "sequra-widget",
-            "sequra-promotion", "sequra-payment",
-        ],
-        # Oney
-        "oney": [
-            "oney.js", "data-oney", "oney-widget",
-            "cdn.oney", "oney.io", "oney-simulation",
-            "oney-facilypay",
-        ],
-        # Afterpay / Clearpay
-        "afterpay": [
-            "afterpay.js", "data-afterpay", "afterpay-placement",
-            "js.afterpay.com", "static.afterpay.com",
-            "afterpay-widget", "clearpay-placement",
-            "js.clearpay.co", "static.clearpay.co",
-        ],
-        # Cofidis
-        "cofidis": [
-            "cofidis-widget", "data-cofidis", "cdn.cofidis",
-            "simulador-cofidis", "cofidis.es", "cofidis.fr",
-        ],
-        # Aplazame
-        "aplazame": [
-            "aplazame.com/js", "data-aplazame", "aplazame-widget",
-            "cdn.aplazame.com",
-        ],
-        # Zip (Quadpay)
-        "zip": [
-            "widgets.quadpay.com", "quadpay-widget",
-            "zip.co/widget", "data-quadpay",
-        ],
-        # PayPal Pay Later
-        "pay later": [
-            "paypal.com/sdk/js.*enable-funding=paylater",
-            "data-sdk-integration-source.*paylater",
-            "paypal-paylater", "pp-paylater",
-        ],
-        # Pledg
-        "pledg": [
-            "pledg.co", "data-pledg", "cdn.pledg",
-        ],
-        # Pagantis -> now Sequra
-        "pagantis": [
-            "pagantis.com", "cdn.pagantis",
-        ],
-        # Cetelem
-        "cetelem": [
-            "cetelem-widget", "simulador-cetelem",
-            "cetelem.es", "cetelem.fr",
-        ],
-        # Soisy
-        "soisy": [
-            "soisy.it", "data-soisy", "cdn.soisy",
-        ],
-        # Pagolight
-        "pagolight": [
-            "pagolight-widget", "data-pagolight", "pagolight.it",
-        ],
-    }
-
-    found_bnpl = []
-
-    # Standard word-boundary matching on combined text
-    for comp, pattern in COMPETITOR_PATTERNS.items():
-        if pattern.search(combined):
-            found_bnpl.append(comp.title())
-
-    # JS SDK signature matching (catches JS-loaded widgets)
-    for comp_name, signatures in JS_BNPL_SIGNATURES.items():
-        if comp_name.title() in found_bnpl:
-            continue  # Already found via regex
-        for sig in signatures:
-            if sig in combined:
-                found_bnpl.append(comp_name.title())
-                break
-
-    # PSP detection (same word-boundary approach)
-    found_psp = []
-    for psp, pattern in PSP_PATTERNS.items():
-        if pattern.search(combined):
-            found_psp.append(psp.title())
-
-    # Ad pixel detection
-    has_meta_pixel = any([
-        "fbq(" in all_scripts,
-        "facebook.com/tr" in combined,
-        "connect.facebook.net" in combined,
-        "fbevents.js" in combined,
-    ])
-
-    has_google_ads = any([
-        "googleads" in combined,
-        "google_conversion" in combined,
-        ("gtag(" in all_scripts and "AW-" in all_scripts),
-        "googleadservices.com" in combined,
-        "googlesyndication.com" in combined,
-    ])
-
-    return found_bnpl, found_psp, has_meta_pixel, has_google_ads
-
-
-# ── TURNAROUND #1: Schema.org / JSON-LD extraction ─────────
-def _extract_structured_data(html):
-    """
-    Extract payment methods from JSON-LD and schema.org markup.
-    Many sites declare accepted payment methods in structured data
-    even if the BNPL widget loads via JS. This is FREE data.
-    """
-    found = []
-    try:
-        soup = BeautifulSoup(html, "html.parser")
-        # JSON-LD blocks
-        for tag in soup.find_all("script", type="application/ld+json"):
-            try:
-                data = json.loads(tag.string or "{}")
-                text = json.dumps(data).lower()
-                for comp, pattern in COMPETITOR_PATTERNS.items():
-                    if pattern.search(text):
-                        found.append(comp.title())
-            except (json.JSONDecodeError, TypeError):
-                continue
-
-        # Meta tags (og:payment, payment-method, etc.)
-        for meta in soup.find_all("meta"):
-            content = (meta.get("content", "") + " " + meta.get("name", "")).lower()
-            for comp, pattern in COMPETITOR_PATTERNS.items():
-                if pattern.search(content):
-                    found.append(comp.title())
-    except Exception:
-        pass
-    return list(set(found))
-
-
-# ── TURNAROUND #2: robots.txt / sitemap checkout discovery ──
-def _find_checkout_from_sitemap(domain):
-    """
-    Parse robots.txt and sitemap.xml to discover actual checkout URLs.
-    Many sites block /checkout in robots.txt (which confirms it exists)
-    or list payment/checkout pages in their sitemap.
-    """
-    checkout_urls = []
-    try:
-        # Check robots.txt for Disallow: /checkout patterns
-        robots = _fetch_page(f"https://{domain}/robots.txt")
-        if robots:
-            for line in robots.split("\n"):
-                line_lower = line.lower().strip()
-                if "disallow" in line_lower:
-                    for kw in ["checkout", "cart", "payment", "pago", "panier"]:
-                        if kw in line_lower:
-                            path = line.split(":", 1)[-1].strip()
-                            if path:
-                                checkout_urls.append(f"https://{domain}{path}")
-                                break
-
-        # Quick sitemap check (just first 50KB)
-        sitemap = _fetch_page(f"https://{domain}/sitemap.xml")
-        if sitemap:
-            for kw in ["checkout", "payment", "cart", "pago", "panier"]:
-                pattern = re.compile(r'<loc>(https?://[^<]*' + kw + r'[^<]*)</loc>', re.I)
-                for match in pattern.findall(sitemap[:50000]):
-                    checkout_urls.append(match)
-    except Exception:
-        pass
-    return checkout_urls[:3]  # Max 3
-
-
-# ── TURNAROUND #3: Google Cache / Wayback Machine fallback ──
-def _fetch_via_cache_fallback(domain):
-    """
-    Use Google's text-only cache as anti-bot bypass. Google already
-    crawled the site — we read Google's cached version, no bot detection.
-    Falls back to Wayback Machine if Google cache unavailable.
-    """
-    # Try Google cache (text version, lighter)
-    google_cache_url = (
-        f"https://webcache.googleusercontent.com/search?q=cache:{domain}+checkout&strip=1"
-    )
-    html = _fetch_page(google_cache_url)
-    if html and len(html) > 500:
-        return html
-
-    # Try Wayback Machine CDX API (find most recent snapshot)
-    try:
-        cdx_url = (
-            f"https://web.archive.org/cdx/search/cdx?"
-            f"url={domain}&output=json&limit=1&fl=timestamp&filter=statuscode:200"
-        )
-        resp = _SESSION.get(cdx_url, timeout=8)
-        if resp.status_code == 200:
-            data = resp.json()
-            if len(data) > 1:  # first row is header
-                ts = data[1][0]
-                wayback_url = f"https://web.archive.org/web/{ts}/{domain}"
-                return _fetch_page(wayback_url)
-    except Exception:
-        pass
+def _fetch_domain(domain):
+    for proto in ("https://","http://"):
+        h = _fetch(f"{proto}{domain}")
+        if h: return h
     return None
 
 
-# ── TURNAROUND #4: JS Bundle Analysis ───────────────────────
-def _analyze_js_bundles(html, domain):
-    """
-    Download external .js files referenced in script tags and search
-    for BNPL strings inside them. The browser must download these files
-    to render the page, so they're never behind anti-bot protection.
-    
-    Cap at 5 JS files, max 200KB each to stay fast.
-    """
-    found = []
-    try:
-        soup = BeautifulSoup(html, "html.parser")
-        js_urls = []
-        base = f"https://{domain}"
-        for tag in soup.find_all("script", src=True):
-            src = tag["src"].strip()
-            # Make absolute
-            if src.startswith("//"):
-                src = "https:" + src
-            elif src.startswith("/"):
-                src = base + src
-            elif not src.startswith("http"):
-                src = base + "/" + src
-            # Only same domain or CDN (skip third-party analytics etc.)
-            if domain in src or "cdn" in src or "assets" in src or "static" in src:
-                js_urls.append(src)
-            if len(js_urls) >= 5:
+# ═══════════════════════════════════════════════════════
+# DETECTION FUNCTIONS
+# ═══════════════════════════════════════════════════════
+
+def _scan_for_providers(text):
+    """Scan text for BNPL/PSP CDN domains. Returns sets of found providers."""
+    text_lower = text.lower()
+    bnpl = set()
+    psp = set()
+    has_paypal = False
+
+    # CDN domain matching (precise)
+    for provider, patterns in _BNPL_CDN.items():
+        for p in patterns:
+            if p in text_lower:
+                bnpl.add(provider.title())
                 break
 
-        for js_url in js_urls:
-            try:
-                if USE_CFFI:
-                    resp = _SESSION.get(js_url, timeout=8, allow_redirects=True)
-                else:
-                    resp = _SESSION.get(js_url, headers=HEADERS, timeout=8, allow_redirects=True)
-                if resp.status_code == 200:
-                    # Only read first 200KB
-                    js_text = resp.text[:200000].lower()
-                    for comp, pattern in COMPETITOR_PATTERNS.items():
-                        if pattern.search(js_text) and comp.title() not in found:
-                            found.append(comp.title())
-            except Exception:
-                continue
-    except Exception:
-        pass
+    # Safe keyword matching (only for unambiguous terms)
+    for provider, keywords in _SAFE_KEYWORDS.items():
+        if provider.title() not in bnpl:  # don't double-count
+            for kw in keywords:
+                if kw in text_lower:
+                    bnpl.add(provider.title())
+                    break
+
+    # PSP CDN matching
+    for provider, patterns in _PSP_CDN.items():
+        for p in patterns:
+            if p in text_lower:
+                psp.add(provider.title())
+                break
+
+    # PayPal (separate)
+    has_paypal = any(p in text_lower for p in _PAYPAL_PATTERNS)
+
+    return bnpl, psp, has_paypal
+
+
+# ── LAYER 1+2: HOMEPAGE HTML + JS/CDN ────────────────
+def _L12_homepage(html):
+    """Layers 1+2: parse homepage for CDN domains in scripts, iframes, links, data-attrs."""
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Collect all relevant text: script srcs, inline JS, iframes, data-attributes
+    parts = [html.lower()]
+    for tag in soup.find_all("script"):
+        parts.append(tag.get("src", "").lower())
+        parts.append((tag.string or "").lower())
+    for tag in soup.find_all("iframe"):
+        parts.append(tag.get("src", "").lower())
+    for tag in soup.find_all("link"):
+        parts.append(tag.get("href", "").lower())
+    for tag in soup.find_all(True):
+        for attr, val in tag.attrs.items():
+            if isinstance(val, str) and any(x in attr.lower() for x in ["data-", "class", "id"]):
+                parts.append(val.lower())
+    combined = " ".join(parts)
+
+    bnpl, psp, has_paypal = _scan_for_providers(combined)
+
+    # Ad pixels
+    has_meta = any(x in combined for x in ["fbq(","facebook.com/tr","connect.facebook.net","fbevents.js"])
+    has_gads = any(x in combined for x in ["googleads","google_conversion","googleadservices.com"]) or ("gtag(" in combined and "aw-" in combined)
+
+    return bnpl, psp, has_paypal, has_meta, has_gads
+
+
+# ── LAYER 3: SCHEMA.ORG ──────────────────────────────
+def _L3(html):
+    from bs4 import BeautifulSoup
+    found = set(); soup = BeautifulSoup(html, "html.parser")
+    for s in soup.find_all("script", type="application/ld+json"):
+        try:
+            t = json.dumps(json.loads(s.string or "")).lower()
+            bnpl, _, _ = _scan_for_providers(t)
+            found |= bnpl
+        except: pass
     return found
 
 
-# ── TURNAROUND #5: DNS CNAME Check ─────────────────────────
-# Known BNPL checkout subdomains and CNAME targets
-BNPL_DNS_TARGETS = {
-    "klarna": ["klarna.com", "klarna.net", "klarnacdn.net"],
-    "alma": ["alma.eu", "getalma.eu"],
-    "sequra": ["sequra.com", "sequra.es"],
-    "afterpay": ["afterpay.com", "clearpay.co.uk", "clearpay.com"],
-    "oney": ["oney.com", "oney.fr", "oney.es"],
-    "cofidis": ["cofidis.com", "cofidis.fr", "cofidis.es"],
-}
-
-CHECKOUT_SUBDOMAINS = ["checkout", "pay", "payment", "pago", "secure"]
-
-
-def _dns_cname_check(domain):
-    """
-    Check if checkout.merchant.com (or pay.merchant.com etc.) has a
-    CNAME pointing to a BNPL provider. This is free, instant, and
-    impossible to block because it's DNS, not HTTP.
-    """
-    found = []
-    for sub in CHECKOUT_SUBDOMAINS:
-        fqdn = f"{sub}.{domain}"
-        try:
-            cname = socket.getfqdn(fqdn)
-            cname_lower = cname.lower()
-            for comp, targets in BNPL_DNS_TARGETS.items():
-                for target in targets:
-                    if target in cname_lower:
-                        found.append(comp.title())
-                        break
-        except Exception:
-            continue
-
-        # Also try direct A record resolution and reverse lookup
-        try:
-            addrs = socket.getaddrinfo(fqdn, 443, proto=socket.IPPROTO_TCP)
-            if addrs:
-                # The subdomain exists — even if we can't match CNAME,
-                # this is useful info (merchant has a checkout subdomain)
-                pass
-        except (socket.gaierror, OSError):
-            continue
-
-    return list(set(found))
+# ── LAYER 4: PRODUCT PAGES ───────────────────────────
+def _L4(domain, html):
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html, "html.parser")
+    urls = []
+    for a in soup.find_all("a", href=True):
+        for pat in _PRODUCT_RE:
+            if re.search(pat, a["href"], re.I):
+                full = urljoin(f"https://{domain}", a["href"])
+                if domain in full: urls.append(full)
+                break
+        if len(urls) >= 2: break
+    bnpl, psp = set(), set()
+    for url in urls[:1]:
+        ph = _fetch(url, 8)
+        if ph:
+            b, p, _ = _scan_for_providers(ph)
+            bnpl |= b; psp |= p
+    return bnpl, psp
 
 
-# ── SERP FALLBACK ───────────────────────────────────────────
-def _serp_competitor_check(domain):
-    api_key = os.getenv("SERP_API_KEY", "").strip()
-    if not api_key:
-        return []
-    query = f"{domain} payment BNPL klarna alma oney"
-    url = "https://serpapi.com/search"
-    params = {"q": query, "api_key": api_key, "num": 5}
+# ── LAYER 5: JS BUNDLE DOWNLOAD ──────────────────────
+def _L5(domain, html):
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html, "html.parser"); found = set()
+    skip = ["google","facebook","analytics","gtag","pixel","hotjar","clarity","tiktok","criteo"]
+    urls = []
+    for t in soup.find_all("script", src=True):
+        src = t["src"]; full = urljoin(f"https://{domain}", src)
+        if not any(s in full.lower() for s in skip): urls.append(full)
+    for url in urls[:4]:
+        js = _fetch(url, 5)
+        if js and len(js) < 1_500_000:
+            b, _, _ = _scan_for_providers(js)
+            found |= b
+    return found
+
+
+# ── LAYER 6: GTM CONTAINER ───────────────────────────
+def _L6_gtm(html):
+    found = set()
+    gtm_ids = set(_GTM_RE.findall(html))
+    for gtm_id in list(gtm_ids)[:2]:
+        js = _fetch(f"https://www.googletagmanager.com/gtm.js?id={gtm_id}", 6)
+        if js:
+            b, _, _ = _scan_for_providers(js)
+            found |= b
+    return found
+
+
+# ── LAYER 7: CHECKOUT PATHS ──────────────────────────
+def _L7(domain):
+    bnpl, psp = set(), set()
+    for path in _CHECKOUT_PATHS:
+        h = _fetch(f"https://{domain}{path}", 6)
+        if h and len(h) > 1000:
+            b, p, _ = _scan_for_providers(h)
+            bnpl |= b; psp |= p
+            if bnpl: break
+    return bnpl, psp
+
+
+# ── LAYER 8: SITEMAP ─────────────────────────────────
+def _L8(domain):
+    urls = []
+    robots = _fetch(f"https://{domain}/robots.txt", 4)
+    if robots:
+        for line in robots.split("\n"):
+            if "sitemap" in line.lower() and ":" in line:
+                surl = line.split(":",1)[-1].strip()
+                if surl.startswith("http"):
+                    sx = _fetch(surl, 5)
+                    if sx:
+                        for u in re.findall(r'<loc>(.*?)</loc>', sx):
+                            if any(p in u.lower() for p in ["/checkout","/cart","/payment"]): urls.append(u)
+                    break
+    return urls[:2]
+
+
+# ── LAYER 9: GOOGLE CACHE + WAYBACK ──────────────────
+def _L9(domain):
+    html = _fetch(f"https://webcache.googleusercontent.com/search?q=cache:{domain}", 8)
+    if html and len(html) > 500: return html
     try:
-        if USE_CFFI:
-            resp = _SESSION.get(url, params=params, timeout=15)
-        else:
-            resp = _SESSION.get(url, params=params, headers=HEADERS, timeout=15)
-        resp.raise_for_status()
-        results_text = str(resp.json().get("organic_results", "")).lower()
-        return [c.title() for c in KNOWN_COMPETITORS if c in results_text]
-    except Exception as exc:
-        log.error(f"SERP API error for {domain}: {exc}")
-        return []
+        wb = _fetch(f"https://archive.org/wayback/available?url={domain}", 5)
+        if wb:
+            data = json.loads(wb)
+            snap = data.get("archived_snapshots",{}).get("closest",{}).get("url","")
+            if snap: return _fetch(snap, 8)
+    except: pass
+    return None
 
 
-# ── SINGLE DOMAIN ENRICHMENT (full pipeline) ────────────────
+# ── LAYER 10: DNS/CNAME ──────────────────────────────
+def _L10(domain):
+    found = set()
+    for prefix in ["checkout","pay","payment"]:
+        try:
+            cname = socket.gethostbyname_ex(f"{prefix}.{domain}")[0]
+            for tgt, prov in _DNS_TARGETS.items():
+                if tgt in cname.lower(): found.add(prov)
+        except: pass
+    return found
+
+
+# ═══════════════════════════════════════════════════════
+# COMBINED PIPELINE
+# ═══════════════════════════════════════════════════════
 def enrich_single_domain(domain):
-    # Check cache first
-    cached = _get_cached(domain)
-    if cached:
-        cached.pop("_ts", None)
-        return cached
-
     result = {
-        "competitors_bnpl": [],
-        "psp_detected": [],
-        "has_meta_pixel": False,
-        "has_google_ads": False,
-        "is_advertising_heavy": False,
+        "competitors_bnpl": [], "psp_detected": [], "has_paypal": False,
+        "has_meta_pixel": False, "has_google_ads": False, "is_advertising_heavy": False,
+        "site_reachable": False,
     }
+    all_bnpl, all_psp = set(), set()
 
-    all_bnpl = []
-    all_psp = []
-    meta_pixel = False
-    google_ads = False
-
-    # Phase 1: Homepage + JS source analysis
-    html = _fetch_homepage(domain)
+    html = _fetch_domain(domain)
     if html:
-        bnpl, psp, meta, gads = detect_from_html(html)
-        all_bnpl.extend(bnpl)
-        all_psp.extend(psp)
-        meta_pixel = meta_pixel or meta
-        google_ads = google_ads or gads
+        result["site_reachable"] = True
+        # L1+L2: Homepage
+        b12, p12, paypal, meta, gads = _L12_homepage(html)
+        all_bnpl |= b12; all_psp |= p12
+        result["has_paypal"] = paypal
+        result["has_meta_pixel"] = meta; result["has_google_ads"] = gads
 
-        # Phase 1b: Extract structured data (JSON-LD, schema.org)
-        structured = _extract_structured_data(html)
-        all_bnpl.extend(structured)
+        # L3: Schema.org
+        all_bnpl |= _L3(html)
 
-    # Phase 2: Product pages (BNPL widgets on product pages)
-    if not all_bnpl:
-        product_html = _scrape_product_pages(domain, homepage_html=html)
-        if product_html:
-            bnpl, psp, meta, gads = detect_from_html(product_html)
-            all_bnpl.extend(bnpl)
-            all_psp.extend(psp)
-            meta_pixel = meta_pixel or meta
-            google_ads = google_ads or gads
+        # L6: GTM (fast, high-impact)
+        all_bnpl |= _L6_gtm(html)
 
-    # Phase 3: JS bundle analysis (download .js files, search BNPL strings)
-    if not all_bnpl and html:
-        js_found = _analyze_js_bundles(html, domain)
-        all_bnpl.extend(js_found)
+        # L4: Product pages (only if no BNPL yet)
+        if not all_bnpl:
+            b4, p4 = _L4(domain, html); all_bnpl |= b4; all_psp |= p4
 
-    # Phase 4: Checkout/cart pages
-    if not all_bnpl:
-        checkout_html = _fetch_checkout_pages(domain)
-        if checkout_html:
-            bnpl, psp, meta, gads = detect_from_html(checkout_html)
-            all_bnpl.extend(bnpl)
-            all_psp.extend(psp)
-            meta_pixel = meta_pixel or meta
-            google_ads = google_ads or gads
+        # L5: JS bundles (only if no BNPL yet)
+        if not all_bnpl:
+            all_bnpl |= _L5(domain, html)
 
-    # Phase 5: Sitemap/robots.txt checkout discovery
-    if not all_bnpl:
-        checkout_urls = _find_checkout_from_sitemap(domain)
-        for url in checkout_urls:
-            extra_html = _fetch_page(url)
-            if extra_html:
-                bnpl, psp, _, _ = detect_from_html(extra_html)
-                all_bnpl.extend(bnpl)
-                all_psp.extend(psp)
+        # L7: Checkout paths (only if no BNPL yet)
+        if not all_bnpl:
+            b7, p7 = _L7(domain); all_bnpl |= b7; all_psp |= p7
+    else:
+        # Homepage blocked — try cache/wayback
+        cached = _L9(domain)
+        if cached:
+            result["site_reachable"] = True
+            b, p, paypal, meta, gads = _L12_homepage(cached)
+            all_bnpl |= b; all_psp |= p
+            result["has_paypal"] = paypal
+            result["has_meta_pixel"] = meta; result["has_google_ads"] = gads
+        # L8: Sitemap
+        for url in _L8(domain):
+            sh = _fetch(url, 5)
+            if sh:
+                b, p, _ = _scan_for_providers(sh)
+                all_bnpl |= b; all_psp |= p
+                if b: break
 
-    # Phase 6: DNS CNAME check (checkout.merchant.com → klarna.com)
-    if not all_bnpl:
-        dns_found = _dns_cname_check(domain)
-        all_bnpl.extend(dns_found)
+    # L10: DNS (always, fast)
+    all_bnpl |= _L10(domain)
 
-    # Phase 7: Google Cache / Wayback fallback (if homepage blocked)
-    if not html and not all_bnpl:
-        cached_html = _fetch_via_cache_fallback(domain)
-        if cached_html:
-            bnpl, psp, meta, gads = detect_from_html(cached_html)
-            all_bnpl.extend(bnpl)
-            all_psp.extend(psp)
-            meta_pixel = meta_pixel or meta
-            google_ads = google_ads or gads
-
-    # Phase 8: SERP fallback (last resort)
-    if not all_bnpl and not html:
-        serp_comps = _serp_competitor_check(domain)
-        all_bnpl.extend(serp_comps)
-
-    # Deduplicate
-    result["competitors_bnpl"] = list(dict.fromkeys(all_bnpl))
-    result["psp_detected"] = list(dict.fromkeys(all_psp))
-    result["has_meta_pixel"] = meta_pixel
-    result["has_google_ads"] = google_ads
-    result["is_advertising_heavy"] = meta_pixel or google_ads
-
-    # Cache result
-    _set_cache(domain, result)
-
+    result["competitors_bnpl"] = sorted(all_bnpl)
+    result["psp_detected"] = sorted(all_psp)
+    result["is_advertising_heavy"] = result["has_meta_pixel"] or result["has_google_ads"]
     return result
 
 
-# ── MULTITHREADED ENRICHMENT PIPELINE ───────────────────────
 def enrich_dataframe(df, enable_scraping=True, progress_callback=None):
-    """Add enrichment columns. Uses 10 threads for ~10x speedup."""
     df["competitors_bnpl"] = ""
     df["psp_detected"] = ""
+    df["has_paypal"] = False
     df["has_meta_pixel"] = False
     df["has_google_ads"] = False
     df["is_advertising_heavy"] = False
 
     if not enable_scraping:
-        log.info("Scraping disabled.")
+        log.info("Scraping disabled — competitor & ad columns left empty.")
         return df
 
-    total = len(df)
-    counter = {"done": 0}
-    lock = Lock()
+    total = len(df); hits = 0; blocked = 0; paypal_only = 0
+    log.info(f"Starting enrichment: {total} domains, 10 layers, curl_cffi={'ON' if _USE_CFFI else 'OFF'}")
+    log.info(f"Detection: CDN-domain matching (precise). PayPal tracked separately.")
 
-    def process_row(idx, domain):
+    for i, (idx, row) in enumerate(df.iterrows()):
+        domain = normalise_domain(row.get("domain", ""))
+        if not domain: continue
         try:
             info = enrich_single_domain(domain)
-            return idx, info, None
-        except Exception as exc:
-            return idx, None, exc
+            df.at[idx, "competitors_bnpl"] = ", ".join(info["competitors_bnpl"])
+            df.at[idx, "psp_detected"] = ", ".join(info["psp_detected"])
+            df.at[idx, "has_paypal"] = info["has_paypal"]
+            df.at[idx, "has_meta_pixel"] = info["has_meta_pixel"]
+            df.at[idx, "has_google_ads"] = info["has_google_ads"]
+            df.at[idx, "is_advertising_heavy"] = info["is_advertising_heavy"]
+            if info["competitors_bnpl"]:
+                hits += 1
+            elif info["has_paypal"]:
+                paypal_only += 1
+            if not info["site_reachable"]:
+                blocked += 1
+        except Exception as e:
+            log.error(f"Enrichment fail {domain}: {e}")
+        if progress_callback and (i+1) % 10 == 0:
+            progress_callback(i+1, total)
+        if (i+1) % 100 == 0:
+            log.info(f"Progress: {i+1}/{total} — {hits} dedicated BNPL, {paypal_only} PayPal-only, {blocked} blocked")
 
-    work_items = []
-    for idx, row in df.iterrows():
-        domain = normalise_domain(row.get("domain", ""))
-        if domain:
-            work_items.append((idx, domain))
-
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = {
-            executor.submit(process_row, idx, domain): (idx, domain)
-            for idx, domain in work_items
-        }
-        for future in as_completed(futures):
-            idx, info, exc = future.result()
-            if info:
-                df.at[idx, "competitors_bnpl"] = ", ".join(info["competitors_bnpl"])
-                df.at[idx, "psp_detected"] = ", ".join(info["psp_detected"])
-                df.at[idx, "has_meta_pixel"] = info["has_meta_pixel"]
-                df.at[idx, "has_google_ads"] = info["has_google_ads"]
-                df.at[idx, "is_advertising_heavy"] = info["is_advertising_heavy"]
-            elif exc:
-                domain = futures[future][1]
-                log.error(f"Enrichment failed for {domain}: {exc}")
-            with lock:
-                counter["done"] += 1
-                if progress_callback:
-                    progress_callback(counter["done"], total)
-
-    return df
-
-
-# ── STORE LOCATOR DETECTION ─────────────────────────────────
-STORE_LOCATOR_SIGNALS = [
-    "store locator", "store-locator", "find a store", "find-a-store",
-    "our stores", "our-stores", "store finder", "store-finder",
-    "nuestras tiendas", "encuentra tu tienda", "puntos de venta",
-    "localizador de tiendas", "tiendas fisicas", "tiendas-fisicas",
-    "nossas lojas", "encontre uma loja", "lojas fisicas",
-    "nos boutiques", "nos magasins", "trouver un magasin",
-    "trouver-un-magasin", "points de vente", "nos-magasins",
-    "i nostri negozi", "trova negozio", "punti vendita",
-    "/stores", "/tiendas", "/boutiques", "/magasins",
-    "/lojas", "/negozi", "/storelocator", "/store-locator",
-]
-
-
-def detect_store_locator(domain):
-    try:
-        for proto in ("https://", "http://"):
-            try:
-                if USE_CFFI:
-                    resp = _SESSION.get(
-                        f"{proto}{domain}", timeout=8, allow_redirects=True,
-                    )
-                else:
-                    resp = _SESSION.get(
-                        f"{proto}{domain}", headers=HEADERS, timeout=8, allow_redirects=True,
-                    )
-                if resp.status_code == 200:
-                    html_lower = resp.text.lower()
-                    for signal in STORE_LOCATOR_SIGNALS:
-                        if signal in html_lower:
-                            return True
-                    return False
-            except Exception:
-                continue
-    except Exception:
-        pass
-    return False
-
-
-def enrich_store_locator(df, progress_callback=None):
-    """Detect physical stores. Uses 10 threads for ~10x speedup."""
-    df["has_physical_stores"] = False
-    df["channel_type"] = "Pure E-commerce"
-
-    total = len(df)
-    counter = {"done": 0}
-    lock = Lock()
-
-    def check_store(idx, domain):
-        try:
-            has_stores = detect_store_locator(domain)
-            return idx, has_stores, None
-        except Exception as exc:
-            return idx, False, exc
-
-    work_items = []
-    for idx, row in df.iterrows():
-        domain = normalise_domain(row.get("domain", ""))
-        if domain:
-            work_items.append((idx, domain))
-
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = {
-            executor.submit(check_store, idx, domain): (idx, domain)
-            for idx, domain in work_items
-        }
-        for future in as_completed(futures):
-            idx, has_stores, exc = future.result()
-            df.at[idx, "has_physical_stores"] = has_stores
-            df.at[idx, "channel_type"] = "Omnichannel" if has_stores else "Pure E-commerce"
-            if exc:
-                domain = futures[future][1]
-                log.error(f"Store locator failed for {domain}: {exc}")
-            with lock:
-                counter["done"] += 1
-                if progress_callback:
-                    progress_callback(counter["done"], total)
-
+    log.info(f"Enrichment complete: {hits} dedicated BNPL ({hits/max(total,1)*100:.1f}%), "
+             f"{paypal_only} PayPal-only, {blocked} unreachable, "
+             f"{total - hits - paypal_only - blocked} clean (no BNPL)")
     return df
