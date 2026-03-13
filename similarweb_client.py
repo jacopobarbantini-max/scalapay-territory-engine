@@ -45,6 +45,7 @@ _CODE_TO_TERRITORY: Dict[int, str] = {
 }
 
 RATE_LIMIT_SECONDS = 2
+SITE_TAGS_BATCH_SIZE = 200
 
 
 # ---------------------------------------------------------------------------
@@ -78,28 +79,46 @@ def _build_search_payload(
     page_size: int = 100,
     filters: Optional[dict] = None,
 ) -> dict:
-    """Build the POST body for the Pro API advanced-search endpoint."""
-    default_filters: dict = {
-        "mode": "specific",
-        "industries": [],
-        "technologies": [],
-        "employeeRange": [],
-        "revenueRange": [],
-        "businessModel": [],
-        "siteTags": [],
-    }
-    if filters:
-        default_filters.update(filters)
+    """Build the POST body for the Pro API advanced-search endpoint.
+
+    Matches the real SimilarWeb Lead Generator payload format:
+    queryFilters → leadsFilters (countries, industryFilter with tags)
+                 → signalsFilters (technologies, traffic signals)
+    """
+    site_tags = (filters or {}).get("siteTags", [])
+    industries = (filters or {}).get("industries", [])
 
     return {
-        "countries": country_codes,
         "page": page,
         "pageSize": page_size,
         "orderBy": "visits",
         "asc": False,
         "isNewOnly": False,
         "leadGenTrafficAggregationEnabled": True,
-        "filters": default_filters,
+        "queryFilters": {
+            "leadsFilters": {
+                "countries": country_codes,
+                "suppressionListIds": [],
+                "industryFilter": {
+                    "inclusion": "includeOnly",
+                    "tags": site_tags,
+                    "industryCodesFilter": {
+                        "sicCodes": [],
+                        "naicsCodes": [],
+                    },
+                    "values": industries,
+                },
+                "searchText": "",
+            },
+            "signalsFilters": {
+                "AdNetwork": [],
+                "Technology": [],
+                "Traffic": [],
+                "News": [],
+                "Intent": [],
+                "mode": "specific",
+            },
+        },
     }
 
 
@@ -118,10 +137,19 @@ def _call_pro_api(endpoint_path: str, payload: dict) -> Optional[dict]:
     headers["Cookie"] = cookies_str
     headers["Content-Type"] = "application/json"
 
+    n_tags = len(
+        payload.get("queryFilters", {}).get("leadsFilters", {}).get("industryFilter", {}).get("tags", [])
+    ) if "queryFilters" in payload else 0
+    log.info("Pro API POST %s — payload keys: %s, tags count: %d",
+             endpoint_path, list(payload.keys()), n_tags)
     try:
         resp = requests.post(url, json=payload, headers=headers, timeout=30)
         if resp.status_code == 200:
-            return resp.json()
+            data = resp.json()
+            log.info("Pro API %s — HTTP 200, response keys: %s, rows: %s",
+                     endpoint_path, list(data.keys()) if isinstance(data, dict) else type(data),
+                     len(data.get("rows", [])) if isinstance(data, dict) and "rows" in data else "N/A")
+            return data
         log.error("Pro API returned %s for %s: %s", resp.status_code, endpoint_path, resp.text[:200])
         return None
     except Exception as exc:
@@ -291,34 +319,21 @@ def _merge_details(df: pd.DataFrame, details: dict, country_codes: List[int]) ->
 # ---------------------------------------------------------------------------
 
 
-def fetch_leads_pro_api(
-    countries: List[str],
-    page_size: int = 100,
-    max_pages: int = 1,
-    filters: Optional[dict] = None,
-) -> pd.DataFrame:
-    """Fetch leads from the Similarweb Pro API.
-
-    Three-step flow: paginated search, batch details, parse+merge.
-    """
-    cookies = load_cookies()
-    if not cookies:
-        log.warning("No cookies — skipping Pro API fetch.")
-        return pd.DataFrame()
-
-    country_codes = _resolve_country_codes(countries)
-    if not country_codes:
-        log.warning("No valid country codes resolved from: %s", countries)
-        return pd.DataFrame()
-
-    # Step 1: Paginated search
+def _fetch_single_tag_batch(
+    country_codes: List[int],
+    filters: Optional[dict],
+    page_size: int,
+    max_pages: int,
+) -> List[dict]:
+    """Run paginated search for a single set of filters (one tag batch)."""
     all_rows: List[dict] = []
     for page in range(1, max_pages + 1):
         if page > 1:
             time.sleep(RATE_LIMIT_SECONDS)
 
         payload = _build_search_payload(country_codes, page=page, page_size=page_size, filters=filters)
-        log.info("Pro API search page %d — siteTags: %s", page, (filters or {}).get("siteTags", []))
+        n_tags = len((filters or {}).get("siteTags", []))
+        log.info("Pro API search page %d — %d siteTags", page, n_tags)
         result = _call_pro_api("/sales-api/advanced-search/websites", payload)
 
         if result is None:
@@ -335,6 +350,68 @@ def fetch_leads_pro_api(
 
         if len(page_rows) < page_size:
             break
+
+    return all_rows
+
+
+def fetch_leads_pro_api(
+    countries: List[str],
+    page_size: int = 100,
+    max_pages: int = 1,
+    filters: Optional[dict] = None,
+) -> pd.DataFrame:
+    """Fetch leads from the Similarweb Pro API.
+
+    If siteTags exceed SITE_TAGS_BATCH_SIZE, splits into batches and
+    deduplicates results by domain (keeping the row with highest visits).
+    """
+    cookies = load_cookies()
+    if not cookies:
+        log.warning("No cookies — skipping Pro API fetch.")
+        return pd.DataFrame()
+
+    country_codes = _resolve_country_codes(countries)
+    if not country_codes:
+        log.warning("No valid country codes resolved from: %s", countries)
+        return pd.DataFrame()
+
+    # Build tag batches
+    all_tags = (filters or {}).get("siteTags", [])
+    other_filters = {k: v for k, v in (filters or {}).items() if k != "siteTags"}
+
+    if len(all_tags) <= SITE_TAGS_BATCH_SIZE:
+        tag_batches = [all_tags] if all_tags else [[]]
+    else:
+        tag_batches = [
+            all_tags[i : i + SITE_TAGS_BATCH_SIZE]
+            for i in range(0, len(all_tags), SITE_TAGS_BATCH_SIZE)
+        ]
+        log.info("Splitting %d siteTags into %d batches of ≤%d",
+                 len(all_tags), len(tag_batches), SITE_TAGS_BATCH_SIZE)
+
+    # Step 1: Paginated search per batch
+    all_rows: List[dict] = []
+    seen_domains: set = set()
+    for batch_idx, tag_batch in enumerate(tag_batches):
+        if batch_idx > 0:
+            time.sleep(RATE_LIMIT_SECONDS)
+
+        batch_filters = dict(other_filters)
+        if tag_batch:
+            batch_filters["siteTags"] = tag_batch
+
+        log.info("Tag batch %d/%d — %d tags", batch_idx + 1, len(tag_batches), len(tag_batch))
+        batch_rows = _fetch_single_tag_batch(country_codes, batch_filters, page_size, max_pages)
+
+        # Deduplicate across batches: keep first occurrence (highest visits within batch)
+        for row in batch_rows:
+            domain = normalise_domain(row.get("site", ""))
+            if domain and domain not in seen_domains:
+                seen_domains.add(domain)
+                all_rows.append(row)
+
+        log.info("Batch %d/%d done: %d new rows (total unique: %d)",
+                 batch_idx + 1, len(tag_batches), len(batch_rows), len(all_rows))
 
     if not all_rows:
         return pd.DataFrame()
