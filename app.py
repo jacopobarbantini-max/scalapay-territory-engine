@@ -394,7 +394,11 @@ def run_pipeline():
                 all_dfs.append(df)
                 st.success(f"✅ {FLAGS.get(country,'')} {country}: {len(df)} demo leads")
     elif use_pro_api:
-        with st.spinner(f"🔌 Fetching from Pro API ({pro_api_country})..."):
+        _n_tags = len(api_filters.get("siteTags", [])) if api_filters else 0
+        log.info("Pro API launch — country=%s, page_size=%s, max_pages=%s, tags=%d, filters=%s",
+                 pro_api_country, page_size, max_pages, _n_tags,
+                 str(api_filters)[:200] if api_filters else "None")
+        with st.spinner(f"🔌 Fetching from Pro API ({pro_api_country}, {_n_tags} tags)..."):
             df = ingest(
                 pro_api_country,
                 use_pro_api=True,
@@ -567,15 +571,37 @@ if "result_df" in st.session_state and st.session_state.result_df is not None:
 
     st.markdown("")
 
-    # Display columns
+    # Display columns — primary + all SW extracted data + scoring + enrichment
     dcols = ["domain", "country", "tier", "scalapay_category", "account_segment",
              "Sales_Priority_Score", "lead_warmth", "est_ttv_annual_eur", "est_mr_annual_eur"]
-    extras = ["est_monthly_txns", "aov_used", "bnpl_pen_used", "ttv_source",
-              "industry", "monthly_traffic", "yoy_growth", "mom_growth", "email",
-              "competitors_bnpl", "psp_detected", "has_meta_pixel", "has_google_ads",
-              "hs_deal_stage", "hs_deal_owner", "hs_cross_country", "hs_it_deal_found",
-              "in_hubspot_sw", "opportunity_level", "competitors_list", "is_actionable", "growth_score",
-              "hq_country", "top_country"]
+    extras = [
+        # Scoring details
+        "est_monthly_txns", "aov_used", "bnpl_pen_used", "ttv_source",
+        # SW traffic & engagement
+        "industry", "category", "monthly_traffic", "avg_monthly_visits",
+        "yoy_growth", "mom_growth",
+        "total_page_views", "desktop_page_views", "mobile_page_views",
+        "bounce_rate", "direct_visits", "referrals_visits",
+        "paid_search_share", "international_visits",
+        # SW company info
+        "employees_bucket", "annual_revenue_bucket", "monthly_transactions_bucket",
+        "business_model", "email", "phone", "hq_country", "top_country",
+        "linkedin_url",
+        # SW demographics
+        "male_share", "female_share",
+        "age_18_24", "age_25_34", "age_35_44", "age_45_54", "age_55_64", "age_65_plus",
+        # SW tags & tech
+        "site_tags", "payment_technologies",
+        # Enrichment & competitors
+        "competitors_bnpl", "psp_detected", "has_meta_pixel", "has_google_ads",
+        "opportunity_level", "competitors_list", "is_actionable",
+        # HubSpot
+        "in_hubspot_sw", "hs_deal_stage", "hs_deal_owner", "hs_cross_country", "hs_it_deal_found",
+        # Scoring sub-scores
+        "growth_score", "penetration_score", "tier_score", "warmth_score", "market_opportunity_score",
+        # Estimates
+        "annual_revenue_est", "employees_est", "monthly_transactions_est",
+    ]
     for c in extras:
         if c in df.columns:
             dcols.append(c)
@@ -586,6 +612,22 @@ if "result_df" in st.session_state and st.session_state.result_df is not None:
         "est_ttv_annual_eur": st.column_config.NumberColumn("TTV Annual €", format="€%d"),
         "est_mr_annual_eur": st.column_config.NumberColumn("MR Annual €", format="€%d"),
         "monthly_traffic": st.column_config.NumberColumn("Traffic", format="%d"),
+        "avg_monthly_visits": st.column_config.NumberColumn("Avg Monthly", format="%d"),
+        "total_page_views": st.column_config.NumberColumn("Page Views", format="%d"),
+        "desktop_page_views": st.column_config.NumberColumn("Desktop PV", format="%d"),
+        "mobile_page_views": st.column_config.NumberColumn("Mobile PV", format="%d"),
+        "bounce_rate": st.column_config.NumberColumn("Bounce %", format="%.1f%%"),
+        "direct_visits": st.column_config.NumberColumn("Direct", format="%d"),
+        "referrals_visits": st.column_config.NumberColumn("Referrals", format="%d"),
+        "paid_search_share": st.column_config.NumberColumn("Paid Search %", format="%.1f%%"),
+        "international_visits": st.column_config.NumberColumn("Intl Visits", format="%d"),
+        "yoy_growth": st.column_config.NumberColumn("YoY %", format="%.1f%%"),
+        "mom_growth": st.column_config.NumberColumn("MoM %", format="%.1f%%"),
+        "male_share": st.column_config.NumberColumn("Male %", format="%.1f%%"),
+        "female_share": st.column_config.NumberColumn("Female %", format="%.1f%%"),
+        "annual_revenue_est": st.column_config.NumberColumn("Revenue Est €", format="€%,.0f"),
+        "employees_est": st.column_config.NumberColumn("Employees Est", format="%,.0f"),
+        "monthly_transactions_est": st.column_config.NumberColumn("Txns Est", format="%,.0f"),
     }
 
     # Tabs
