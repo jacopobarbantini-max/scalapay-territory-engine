@@ -2,7 +2,7 @@
 app.py — Scalapay Territory Engine v4 (Streamlit)
 IT/FR/IB tiering, real SW transactions, travel sub-categories, HubSpot bulk-fetch.
 """
-import io, os, logging
+import io, json, os, logging
 from datetime import datetime
 import pandas as pd
 import streamlit as st
@@ -36,7 +36,7 @@ class StreamlitLogHandler(logging.Handler):
 
 _log_handler = StreamlitLogHandler()
 _log_handler.setLevel(logging.INFO)
-for logger_name in ["app", "enrichment", "hubspot_client", "scoring", "utils", "similarweb_client"]:
+for logger_name in ["app", "enrichment", "hubspot_client", "scoring", "utils", "similarweb_client", "similarweb_cookies"]:
     lg = logging.getLogger(logger_name)
     lg.addHandler(_log_handler)
     lg.setLevel(logging.INFO)
@@ -71,19 +71,88 @@ with st.sidebar:
     data_mode = st.radio("Similarweb input", [
         "📁 Upload (XLSX/CSV)",
         "🔄 Reload Export (add CRM)",
+        "🔌 Pro API (Similarweb)",
         "🧪 Demo (sample data)",
     ], index=0)
     use_sample = "Demo" in data_mode
     use_reload = "Reload" in data_mode
+    use_pro_api = "Pro API" in data_mode
 
     # Initialize all file variables
     file_ib = file_fr = file_it = reload_file = None
+    api_filters = None
+    page_size = 100
+    max_pages = 1
+    pro_api_country = "IT"
 
     if use_reload:
         st.markdown("---")
         st.markdown("**📂 Upload Previous Export**")
         st.caption("Upload a scored Excel export to add HubSpot CRM enrichment on top. Keeps all existing scraping data.")
         reload_file = st.file_uploader("Previously scored .xlsx", type=["xlsx","xls"], key="reload")
+    elif use_pro_api:
+        st.markdown("---")
+        st.markdown("**🔌 Pro API Settings**")
+        pro_api_country = st.selectbox("Territory", ["IT", "FR", "ES", "IB"], index=0)
+        page_size = st.number_input("Results per page", value=100, min_value=10, max_value=500, step=10)
+        max_pages = st.number_input("Max pages", value=1, min_value=1, max_value=50, step=1)
+
+        # ── Tag Filter ──────────────────────────────────────
+        api_filters = None
+        _tags_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bnpl_tags_by_category.json")
+        if os.path.exists(_tags_path):
+            st.markdown("### Filtro Prodotti (Tags)")
+            if "bnpl_tags_data" not in st.session_state:
+                with open(_tags_path) as _f:
+                    st.session_state["bnpl_tags_data"] = json.load(_f)
+            _tags_data = st.session_state["bnpl_tags_data"]
+
+            _all_categories = sorted(_tags_data.keys())
+            selected_categories = st.multiselect("Categorie Scalapay", _all_categories, default=[])
+
+            # Dynamic subcategories
+            _available_subs = {}
+            for cat in selected_categories:
+                for sub in _tags_data.get(cat, {}):
+                    _available_subs[sub] = cat
+            selected_subcategories = []
+            if _available_subs:
+                selected_subcategories = st.multiselect(
+                    "Sottocategorie",
+                    sorted(_available_subs.keys()),
+                    default=sorted(_available_subs.keys()),
+                )
+
+            # Collect tags from selected subcategories
+            _selected_tags = set()
+            for cat in selected_categories:
+                subs = _tags_data.get(cat, {})
+                for sub_name, sub_tags in subs.items():
+                    if not selected_subcategories or sub_name in selected_subcategories:
+                        _selected_tags.update(sub_tags)
+
+            # Free-text search
+            _free_text = st.text_input("Ricerca libera tag", "", help="Cerca tra tutti i ~280k tags Similarweb")
+            if _free_text.strip():
+                _all_tags_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "similarweb_all_tags.json")
+                if os.path.exists(_all_tags_path):
+                    if "all_sw_tags" not in st.session_state:
+                        with open(_all_tags_path) as _f2:
+                            st.session_state["all_sw_tags"] = json.load(_f2)
+                    _query = _free_text.strip().lower()
+                    _matches = [t for t in st.session_state["all_sw_tags"] if _query in t.lower()]
+                    if _matches:
+                        _picked = st.multiselect(f"{len(_matches)} tags trovati", _matches[:200], default=[])
+                        _selected_tags.update(_picked)
+
+            _selected_tags = sorted(_selected_tags)
+            if _selected_tags:
+                st.info(f"{len(_selected_tags)} tags selezionati")
+                with st.expander("Preview tags"):
+                    st.write(", ".join(_selected_tags[:50]))
+                    if len(_selected_tags) > 50:
+                        st.caption(f"... e altri {len(_selected_tags) - 50}")
+                api_filters = {"siteTags": _selected_tags}
     elif not use_sample:
         st.markdown("---")
         st.markdown("**📂 Upload Similarweb Exports**")
@@ -324,6 +393,21 @@ def run_pipeline():
             if not df.empty:
                 all_dfs.append(df)
                 st.success(f"✅ {FLAGS.get(country,'')} {country}: {len(df)} demo leads")
+    elif use_pro_api:
+        with st.spinner(f"🔌 Fetching from Pro API ({pro_api_country})..."):
+            df = ingest(
+                pro_api_country,
+                use_pro_api=True,
+                page_size=page_size,
+                max_pages=max_pages,
+                filters=api_filters,
+            )
+            if not df.empty:
+                all_dfs.append(df)
+                st.success(f"✅ {FLAGS.get(pro_api_country,'')} {pro_api_country}: {len(df)} leads from Pro API")
+            else:
+                st.warning(f"⚠️ Pro API returned no results. Check cookies and filters.")
+        progress.progress(1.0)
     else:
         uploads = []
         if file_ib: uploads.append((file_ib, "ES"))
@@ -405,7 +489,7 @@ def run_pipeline():
 col1, col2, _ = st.columns([1, 1, 3])
 with col1:
     btn_label = "🔄 Reload + CRM" if use_reload else "🚀 Generate Territory List"
-    can_run = (use_sample or use_reload and reload_file or file_ib or file_fr or file_it) and w_sum <= 100
+    can_run = (use_sample or use_pro_api or (use_reload and reload_file) or file_ib or file_fr or file_it) and w_sum <= 100
     generate = st.button(btn_label, type="primary", use_container_width=True, disabled=not can_run)
 with col2:
     if "result_df" in st.session_state and st.session_state.result_df is not None:
