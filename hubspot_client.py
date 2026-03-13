@@ -14,6 +14,15 @@ from config import (
 from utils import get_logger, normalise_domain
 log = get_logger(__name__)
 
+def _safe_num(val):
+    """Convert HubSpot property to float, return 0.0 if invalid."""
+    if val is None or val == "" or val == "nan":
+        return 0.0
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return 0.0
+
 def _get_api_key():
     return os.getenv("HUBSPOT_API_KEY", "").strip() or None
 
@@ -45,7 +54,10 @@ def _bulk_fetch_companies(api_key: str, progress_callback=None) -> Dict:
         url = "https://api.hubapi.com/crm/v3/objects/companies"
         params = {
             "limit": 100,
-            "properties": "domain,name,country,hs_object_id",
+            "properties": "domain,name,country,hs_object_id,category,subcategory,"
+                          "scalapay__aov,scalapay__cr,aov___tot,aov__fr_,aov__es_,aov__it_,"
+                          "fr___monthly_visits,es___monthly_visits,it___monthly_visits,"
+                          "hs_parent_company_id,hs_num_child_companies",
         }
         if after:
             params["after"] = after
@@ -87,6 +99,19 @@ def _bulk_fetch_companies(api_key: str, progress_callback=None) -> Dict:
                 "name": props.get("name", ""),
                 "country": props.get("country", ""),
                 "company_id": props.get("hs_object_id", company.get("id", "")),
+                "hs_category": props.get("category", ""),
+                "hs_subcategory": props.get("subcategory", ""),
+                "hs_aov_benchmark": props.get("scalapay__aov", ""),
+                "hs_cr_benchmark": props.get("scalapay__cr", ""),
+                "hs_aov_tot": props.get("aov___tot", ""),
+                "hs_aov_fr": props.get("aov__fr_", ""),
+                "hs_aov_es": props.get("aov__es_", ""),
+                "hs_aov_it": props.get("aov__it_", ""),
+                "hs_visits_fr": props.get("fr___monthly_visits", ""),
+                "hs_visits_es": props.get("es___monthly_visits", ""),
+                "hs_visits_it": props.get("it___monthly_visits", ""),
+                "hs_parent_company_id": props.get("hs_parent_company_id", ""),
+                "hs_num_child_companies": props.get("hs_num_child_companies", ""),
             }
             total_fetched += 1
 
@@ -178,43 +203,66 @@ def _effective_business_days(last_contact_dt, check_dt):
 
 def classify_warmth(deals: list) -> str:
     """
-    Approachability classification:
-      Net New              → not in HubSpot
-      Lost >6 months       → deal lost long ago, re-approachable
-      Stale Deal           → warm/active deal BUT no contact beyond holiday-adjusted threshold
-      In HubSpot (unknown) → exists but no clear deal status
-      Lost <6 months       → deal lost recently, bad timing
-      Warm (active)        → colleague contacted recently, not approachable
-      Existing Won         → already a Scalapay merchant
+    Approachability classification with stage-aware stale detection.
+    
+    Key insight: a deal stuck 45d in "Discovery" is dead.
+    A deal stuck 45d in "Contract Negotiation" might just be waiting for legal.
+    
+    Thresholds (holiday-adjusted):
+      Early stages (SQL, Discovery, Target):        30 days → Stale (dead)
+      Mid stages (Business Meeting, Negotiation):    45 days → Stale (check with AE)
+      Late stages (KYC, Contract, Onboarding):       60 days → Stale (possibly waiting)
     """
     if not deals:
         return "Net New"
 
     from datetime import datetime, timedelta
+    from config import (HS_DEAL_STAGES_WON, HS_DEAL_STAGES_LOST, HS_DEAL_STAGES_WARM,
+                        HS_STALE_THRESHOLDS, HS_EARLY_STAGES, HS_LATE_STAGES)
     now = datetime.utcnow()
     six_months_ago = now - timedelta(days=180)
 
     stages = [d.get("dealstage", "").lower() for d in deals]
 
+    # Won = already a merchant
     if any(s in HS_DEAL_STAGES_WON for s in stages):
         return "Existing Won"
 
+    # Active deal stages — check stale with stage-aware threshold
     if any(s in HS_DEAL_STAGES_WARM for s in stages):
         for d in deals:
-            if d.get("dealstage", "").lower() in HS_DEAL_STAGES_WARM:
-                last_contact = d.get("notes_last_contacted", "")
-                if last_contact:
-                    try:
-                        lc_dt = datetime.fromisoformat(last_contact.replace("Z", "+00:00")).replace(tzinfo=None)
-                        eff_days = _effective_business_days(lc_dt, now)
-                        if eff_days <= 45:
-                            return "Warm (active)"
+            stage = d.get("dealstage", "").lower()
+            if stage not in HS_DEAL_STAGES_WARM:
+                continue
+            last_contact = d.get("notes_last_contacted", "")
+            if last_contact:
+                try:
+                    lc_dt = datetime.fromisoformat(last_contact.replace("Z", "+00:00")).replace(tzinfo=None)
+                    eff_days = _effective_business_days(lc_dt, now)
+
+                    # Determine threshold based on deal stage
+                    if stage in HS_EARLY_STAGES:
+                        threshold = HS_STALE_THRESHOLDS["early"]   # 30d
+                    elif stage in HS_LATE_STAGES:
+                        threshold = HS_STALE_THRESHOLDS["late"]    # 60d
+                    else:
+                        threshold = HS_STALE_THRESHOLDS["mid"]     # 45d
+
+                    if eff_days <= threshold:
+                        return "Warm (active)"
+                    else:
+                        # Stage-aware stale label
+                        if stage in HS_EARLY_STAGES:
+                            return "Stale Deal"    # Dead — re-approachable
+                        elif stage in HS_LATE_STAGES:
+                            return "Warm"           # Probably waiting, check with AE
                         else:
                             return "Stale Deal"
-                    except (ValueError, TypeError):
-                        pass
-        return "Warm (active)"
+                except (ValueError, TypeError):
+                    pass
+        return "Warm (active)"  # Has warm stage but no contact date → assume active
 
+    # Lost deals — check timing
     if any(s in HS_DEAL_STAGES_LOST for s in stages):
         for d in deals:
             if d.get("dealstage", "").lower() in HS_DEAL_STAGES_LOST:
@@ -313,6 +361,18 @@ def enrich_with_hubspot(df: pd.DataFrame, progress_callback=None) -> pd.DataFram
             continue
         df.at[idx, "hs_exists"] = True
         df.at[idx, "hs_company_name"] = info.get("name", "")
+        # AOV cascade: real per-merchant > benchmark > config fallback
+        df.at[idx, "hs_aov_tot"] = _safe_num(info.get("hs_aov_tot", ""))
+        df.at[idx, "hs_aov_fr"] = _safe_num(info.get("hs_aov_fr", ""))
+        df.at[idx, "hs_aov_es"] = _safe_num(info.get("hs_aov_es", ""))
+        df.at[idx, "hs_aov_it"] = _safe_num(info.get("hs_aov_it", ""))
+        df.at[idx, "hs_aov_benchmark"] = _safe_num(info.get("hs_aov_benchmark", ""))
+        df.at[idx, "hs_category"] = info.get("hs_category", "")
+        df.at[idx, "hs_subcategory"] = info.get("hs_subcategory", "")
+        # Cross-country traffic from HubSpot
+        df.at[idx, "hs_visits_fr"] = _safe_num(info.get("hs_visits_fr", ""))
+        df.at[idx, "hs_visits_es"] = _safe_num(info.get("hs_visits_es", ""))
+        df.at[idx, "hs_visits_it"] = _safe_num(info.get("hs_visits_it", ""))
 
     # Step 5: Fetch deals for matched companies (rate-limited)
     # Only fetch deals for top-scored or important matches to limit API calls
@@ -346,8 +406,118 @@ def enrich_with_hubspot(df: pd.DataFrame, progress_callback=None) -> pd.DataFram
         deals = company_deals_cache.get(cid, [])
         df.at[idx, "lead_warmth"] = classify_warmth(deals)
 
+    # Step 7: Holding group detection
+    # Build company_id → name reverse lookup
+    cid_to_name = {}
+    for dom, info in domain_map.items():
+        cid = info.get("company_id", "")
+        if cid:
+            cid_to_name[str(cid)] = info.get("name", dom)
+
+    df["hs_holding_group"] = ""
+    holding_count = 0
+    for idx, info in match_results.items():
+        parent_id = str(info.get("hs_parent_company_id", "")).strip()
+        n_children = info.get("hs_num_child_companies", "")
+        try:
+            n_children = int(float(n_children)) if n_children else 0
+        except (ValueError, TypeError):
+            n_children = 0
+
+        if parent_id and parent_id != "0" and parent_id != "":
+            # This company has a parent → it's part of a group
+            parent_name = cid_to_name.get(parent_id, f"Group #{parent_id}")
+            df.at[idx, "hs_holding_group"] = parent_name
+            holding_count += 1
+        elif n_children and n_children > 0:
+            # This IS a parent company with children
+            df.at[idx, "hs_holding_group"] = f"{info.get('name', '')} (parent, {n_children} brands)"
+            holding_count += 1
+
+    if holding_count > 0:
+        log.info(f"Holding groups: {holding_count} leads linked to parent/child companies")
+
     # Stats
     warmth_counts = df["lead_warmth"].value_counts()
     log.info(f"Warmth distribution:\n{warmth_counts.to_string()}")
 
     return df
+
+
+def extract_non_sw_leads(df, api_key=None):
+    """
+    Find HubSpot companies NOT in the Similarweb list.
+    Returns a DataFrame of re-approachable leads with HubSpot data.
+    Excludes: Won deals, active deals (< 45d contact).
+    """
+    if not api_key:
+        api_key = os.getenv("HUBSPOT_API_KEY", "")
+    if not api_key:
+        log.info("No HubSpot key — skipping non-SW extraction")
+        return pd.DataFrame()
+
+    # Get all domains from SW list
+    sw_domains = set()
+    for d in df["domain"].dropna():
+        sw_domains.add(str(d).strip().lower())
+        root = _extract_root(str(d).strip().lower())
+        sw_domains.add(root)
+
+    # Fetch all HubSpot companies (already cached from bulk fetch)
+    all_companies = _bulk_fetch_companies(api_key)
+    log.info(f"Non-SW check: {len(all_companies)} HS companies vs {len(sw_domains)} SW domains")
+
+    # Find companies NOT in SW
+    non_sw = []
+    for domain, info in all_companies.items():
+        if not info:
+            continue
+        d_clean = str(domain).strip().lower()
+        root = _extract_root(d_clean)
+        if d_clean not in sw_domains and root not in sw_domains:
+            non_sw.append({
+                "domain": d_clean,
+                "hs_company_name": info.get("name", ""),
+                "hs_country": info.get("country", ""),
+                "hs_company_id": info.get("company_id", ""),
+            })
+
+    if not non_sw:
+        log.info("No non-SW leads found in HubSpot")
+        return pd.DataFrame()
+
+    non_sw_df = pd.DataFrame(non_sw)
+    log.info(f"Found {len(non_sw_df)} HubSpot companies not in Similarweb list")
+
+    # Fetch deals for these companies to classify warmth
+    headers = {"Authorization": f"Bearer {api_key}"}
+    for i, (idx, row) in enumerate(non_sw_df.iterrows()):
+        cid = row.get("hs_company_id", "")
+        if not cid:
+            continue
+        try:
+            deals = _fetch_deals_for_company(cid, headers)
+            warmth = classify_warmth(deals)
+            non_sw_df.at[idx, "lead_warmth"] = warmth
+            if deals:
+                stages = [d.get("dealstage", "") for d in deals]
+                non_sw_df.at[idx, "hs_deal_stage"] = ", ".join(filter(None, stages))
+        except Exception:
+            non_sw_df.at[idx, "lead_warmth"] = "In HubSpot (unknown)"
+        if i > 0 and i % 50 == 0:
+            log.info(f"Non-SW deals: {i}/{len(non_sw_df)}")
+            time.sleep(1)
+
+    if "lead_warmth" not in non_sw_df.columns:
+        non_sw_df["lead_warmth"] = "In HubSpot (unknown)"
+
+    # Filter: exclude Won and recently active (Warm)
+    non_sw_df = non_sw_df[~non_sw_df["lead_warmth"].isin(["Existing Won", "Warm (active)"])].reset_index(drop=True)
+    non_sw_df["source"] = "HubSpot (not in SW)"
+
+    log.info(f"Non-SW re-approachable leads: {len(non_sw_df)}")
+    if not non_sw_df.empty:
+        warmth = non_sw_df["lead_warmth"].value_counts()
+        log.info(f"Non-SW warmth:\n{warmth.to_string()}")
+
+    return non_sw_df

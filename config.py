@@ -224,6 +224,99 @@ CATEGORY_AOV: Dict[str, float] = {
     "Electronics & Household appliance": 489, "Learning & Classes": 320,
 }
 DEFAULT_AOV_EUR = 120.0
+
+# Subcategory AOV refinement — HubSpot subcategories with distinct AOV from parent
+# Used as fallback when no HubSpot per-merchant AOV is available
+SUBCATEGORY_AOV: Dict[str, float] = {
+    # Apparel & Fashion
+    "Fast Fashion": 65,
+    "Mid Fashion": 120,
+    "Premium Fashion": 220,
+    "Underwear & Beachwear": 55,
+    # Electronics & Household appliance
+    "Smartphone": 700,
+    "Pc & Electronics": 500,
+    "Household Appliance": 350,
+    "Sou": 200,  # Security & Automation
+    # Home & Garden
+    "Furniture": 450,
+    "Mattresses & Bedding": 550,
+    "Decoration & Lighting": 150,
+    "Home Supplies": 100,
+    "Garden": 180,
+    "Bricolage": 120,
+    # Cosmetics & Beauty
+    "Body & Skincare": 80,
+    "Make-up": 55,
+    "Perfumery": 95,
+    "Hair": 70,
+    "Nails": 40,
+    "Epilation": 200,
+    # Shoes & Accessories
+    "Shoes & Sneakers": 130,
+    "Glasses & Eyewear": 192,
+    "Bags, Luggage & Leather Goods": 180,
+    "Accessories & Specialty Goods": 80,
+    # Travel
+    "Hotel & Resort": 913,
+    "Tour Operator": 1054,
+    "Entertainment & Experiences": 649,
+    "Travel - Agency": 640,
+    "Transportation": 119,
+    # Hobbies & Games
+    "Books": 35,
+    "Music": 30,
+    "Toys": 55,
+    "Video Game": 60,
+    # Luxury Goods
+    "Luxury Clothes": 600,
+    "Luxury Goods - Jewelry": 450,
+    "Luxury Goods - Shoes & Sneakers": 500,
+    "Luxury Goods - Watches": 800,
+    "Bags & Luggage": 400,
+    # Food
+    "Food": 45,
+    "Beverage": 35,
+    # Baby
+    "Kidswear": 80,
+    "Baby Gear": 200,
+    "Baby Miscellaneous": 50,
+    # Sport
+    "Sportswear & Equipment": 160,
+    "Training Equipment": 250,
+    # Health
+    "Pharma": 64,
+    "Medical": 393,
+    "Supplements": 55,
+    "Wellness": 117,
+    # B2B
+    "B2B - Goods": 150,
+    "B2B - Services": 500,
+}
+
+def get_aov(category: str, subcategory: str = "", country: str = "",
+            hs_aov_tot: float = 0, hs_aov_country: float = 0,
+            hs_aov_benchmark: float = 0) -> tuple:
+    """
+    AOV cascade — returns (aov, source) tuple.
+    Priority:
+      1. HubSpot real per-merchant per-country AOV
+      2. HubSpot real per-merchant total AOV
+      3. HubSpot scalapay__aov benchmark
+      4. Config subcategory AOV
+      5. Config category AOV
+    """
+    if hs_aov_country and hs_aov_country > 5:
+        return hs_aov_country, "HS-country"
+    if hs_aov_tot and hs_aov_tot > 5:
+        return hs_aov_tot, "HS-merchant"
+    if hs_aov_benchmark and hs_aov_benchmark > 5:
+        return hs_aov_benchmark, "HS-benchmark"
+    if subcategory and subcategory in SUBCATEGORY_AOV:
+        return SUBCATEGORY_AOV[subcategory], "subcat"
+    if category and category in CATEGORY_AOV:
+        return CATEGORY_AOV[category], "category"
+    return DEFAULT_AOV_EUR, "default"
 SCORING_WEIGHTS = {"tier": 0.20, "account_size": 0.20, "penetration_ttv": 0.15, "traffic_growth": 0.15, "lead_warmth": 0.10, "competitor": 0.10, "whitespace": 0.10}
 WARMTH_SCORES = {"Net New": 15, "Lost >6 months": 10, "Stale Deal": 8, "In HubSpot (unknown)": 6, "Lost <6 months": 3, "Warm (active)": 1, "Existing Won": 0, "Cold/Lost": 7, "Warm": 2}
 CLOSED_LOST_REACTIVATION_MONTHS = 6
@@ -232,9 +325,201 @@ KNOWN_PSPS = ["stripe","adyen","checkout.com","worldpay","braintree","mollie","r
 # TTV ESTIMATION
 # New formula: Visits × ecom_conversion × AOV(category) × BNPL_penetration(category, country) × 12
 # Penetration replaces the old flat Scalapay share (8%)
-TRAFFIC_TO_TRANSACTION_RATE = 0.025  # 2.5% of visits → transactions
+TRAFFIC_TO_TRANSACTION_RATE = 0.025  # Legacy fallback
 WHITESPACE_CATEGORIES = ["Pharma","Dental","Medical","Wellness","Petcare","Veterinarians","Education","Food & Beverage","Glasses & Eyewear"]
-HS_DEAL_STAGES_WON = ["closedwon","deal won","won"]
-HS_DEAL_STAGES_LOST = ["closedlost","closed lost","lost"]
-HS_DEAL_STAGES_WARM = ["discovery","negotiation","proposal","qualification"]
+
+# ═══════════════════════════════════════════════════════
+# v5: CONVERSION RATE PER CATEGORY — derived from REAL SW data
+# Source: 9,249 leads, Monthly Transactions (SW) / Monthly Traffic (SW), median per category
+# Used ONLY as fallback when SW Monthly Transactions are unavailable
+CATEGORY_CR: Dict[str, float] = {
+    "Apparel & Fashion": 0.0060,  # n=918
+    "Auto & Moto": 0.0057,  # n=445
+    "B2B": 0.0058,  # n=1146
+    "Baby & Toddler": 0.0066,  # n=155
+    "Cosmetics & Beauty": 0.0120,  # n=468
+    "Dental": 0.0059,  # n=9
+    "Education": 0.0096,  # n=3
+    "Electronics": 0.0051,  # n=629
+    "Entertainment & Sports": 0.0055,  # n=536
+    "Food & Beverage": 0.0086,  # n=651
+    "General Retail": 0.0106,  # n=142
+    "Generalist Marketplace": 0.0074,  # n=114
+    "Hobbies & Games": 0.0065,  # n=177
+    "Home & Garden": 0.0057,  # n=897
+    "Household Appliance": 0.0058,  # n=147
+    "Jewelry & Watches": 0.0056,  # n=266
+    "Medical": 0.0125,  # n=90
+    "Other": 0.0088,  # n=272
+    "Petcare": 0.0107,  # n=439
+    "Pharma": 0.0117,  # n=564
+    "Shoes & Accessories": 0.0061,  # n=254
+    "Sport": 0.0060,  # n=683
+    "Travel - Adventure & Group Travel": 0.0062,  # n=13
+    "Travel - Entertainment & Experiences": 0.0058,  # n=129
+    "Travel - Hotel & Accommodation": 0.0074,  # n=4
+    "Travel - Local & Urban Transport": 0.0082,  # n=28
+    "Travel - OTA": 0.0052,  # n=30
+    "Travel - Tour Operator": 0.0116,  # n=3
+    "Wellness": 0.0094,  # n=37
+}
+DEFAULT_CR = 0.0062  # overall median
+
+# ═══════════════════════════════════════════════════════
+# v5: AOV VIABILITY — BNPL makes no sense below €20
+# Multiplier on TTV: low AOV → low BNPL viability
+# ═══════════════════════════════════════════════════════
+def get_aov_viability(aov: float) -> float:
+    """
+    BNPL viability by AOV — calibrated on actual HubSpot TTV data (6,567 merchants).
+    Shein (€90) = €323M TTV, Temu (€44) = €227M TTV → low AOV works at volume.
+    Pay in X with Deutsche Bank makes >€500 fully viable.
+    """
+    if aov < 20:   return 0.15   # Delivery food — minimal BNPL value
+    if aov < 40:   return 0.60   # Temu €44 = €227M TTV proves this works
+    if aov < 70:   return 0.85   # Eco Bio €65 = €1.3M, Amica Farmacia €47 = €950K
+    if aov < 100:  return 0.95   # Shein €90 = €323M, Douglas €83 = €13M
+    if aov < 300:  return 1.00   # Sweet spot — ideal BNPL range
+    if aov < 700:  return 1.00   # Pay in X makes this fully viable
+    if aov < 1500: return 0.95   # Pay in X with Deutsche Bank
+    return 0.90                   # Cruise/Tour — works with financing (Si Vola €2053 = €17.6M)
+
+# ═══════════════════════════════════════════════════════
+# v5: COMPETITION ADJUSTMENT — TAM to SAM
+# How much TTV can Scalapay realistically capture given competition
+# ═══════════════════════════════════════════════════════
+
+# Regional market leaders (higher share = lower SAM for us)
+_REGIONAL_LEADERS = {
+    "FR": {"alma": 0.65, "klarna": 0.65, "oney": 0.75},     # Alma strong in FR but merchant adds Scalapay
+    "ES": {"sequra": 0.65, "klarna": 0.65},                   # Sequra strong in ES but not lock-in
+    "PT": {"sequra": 0.70, "klarna": 0.65},
+    "IT": {"klarna": 0.65},                                    # Klarna in IT
+}
+_MINOR_PLAYERS = {"paypal", "cofidis", "pledg", "floa", "heylight", "pagantis", "aplazame"}
+_DIRECT_COMPETITORS_SET = {"klarna", "alma", "sequra", "oney", "clearpay", "afterpay"}
+
+def get_sam_factor(competitors_list: str, country: str, has_paypal: bool = False) -> float:
+    """
+    Competition adjustment: TAM × factor = realistic Scalapay TTV.
+    Calibrated less punitively: merchants ADD BNPL providers, they don't replace.
+    Graindemalice has both Alma + PayPal → room for Scalapay too.
+    
+    Returns 0.0-1.0:
+      1.00 = no competition
+      0.65-0.70 = one strong direct competitor (merchant still likely to add Scalapay)
+      0.25 = 3+ saturated
+    """
+    comps = []
+    if isinstance(competitors_list, str) and competitors_list.strip():
+        comps = [c.strip().lower() for c in competitors_list.split(",") if c.strip()]
+    n = len(comps)
+    co = country.upper() if country else "FR"
+    leaders = _REGIONAL_LEADERS.get(co, {})
+
+    if n == 0:
+        return 0.95 if has_paypal else 1.00
+    elif n == 1:
+        comp = comps[0]
+        if comp in leaders:
+            return leaders[comp]
+        elif comp in _DIRECT_COMPETITORS_SET:
+            return 0.65  # Direct but merchant diversifies
+        else:
+            return 0.85  # Minor player — easy to coexist
+    elif n == 2:
+        has_leader = any(c in leaders for c in comps)
+        has_direct = any(c in _DIRECT_COMPETITORS_SET for c in comps)
+        if has_leader:
+            return 0.40  # Leader + another
+        elif has_direct:
+            return 0.45  # Two direct competitors
+        else:
+            return 0.55  # Two minor players
+    else:
+        return 0.25  # Saturated but never zero
+
+# ═══════════════════════════════════════════════════════
+# v5: BNPL WIDGET TEXT PATTERNS (context-aware matching)
+# Used in enrichment Layer 4 (product pages) to detect BNPL
+# without false positives on generic words
+# ═══════════════════════════════════════════════════════
+BNPL_WIDGET_PATTERNS = {
+    "alma": [
+        "avec alma", "paga con alma", "pay with alma", "powered by alma",
+        "alma - pay", "alma pay", "almapay",
+    ],
+    "oney": [
+        "avec oney", "paga con oney", "pay with oney", "powered by oney",
+        "oney bank", "oney pay",
+    ],
+    "sequra": [
+        "con sequra", "with sequra", "powered by sequra",
+        "paga con sequra", "fracciona con sequra",
+    ],
+    "floa": [
+        "avec floa", "powered by floa", "floa pay", "floa bank",
+    ],
+}
+
+# Generic BNPL installment phrases → then check nearby brand
+BNPL_INSTALLMENT_PHRASES = [
+    "payez en 2x", "payez en 3x", "payez en 4x",
+    "paga in 2 rate", "paga in 3 rate", "paga in 4 rate",
+    "paga en 2 cuotas", "paga en 3 cuotas", "paga en 4 cuotas",
+    "pay in 2", "pay in 3", "pay in 4",
+    "3 fois sans frais", "4 fois sans frais",
+    "3x sans frais", "4x sans frais",
+    "sin intereses", "sans frais", "senza interessi",
+    "split payment", "buy now pay later",
+]
+
+# ═══════════════════════════════════════════════════════
+# v5: NON-E-COMMERCE WATCHLIST
+# Platforms with high transaction volume but not in SW e-commerce data
+# ═══════════════════════════════════════════════════════
+NON_ECOMM_WATCHLIST = [
+    {"domain": "whop.com", "name": "Whop", "category": "Digital Marketplace", "est_monthly_txns": 500000},
+    {"domain": "store.playstation.com", "name": "PlayStation Store", "category": "Digital Games", "est_monthly_txns": 2000000},
+    {"domain": "store.steampowered.com", "name": "Steam", "category": "Digital Games", "est_monthly_txns": 5000000},
+    {"domain": "eventbrite.com", "name": "Eventbrite", "category": "Ticketing", "est_monthly_txns": 300000},
+    {"domain": "ticketmaster.com", "name": "Ticketmaster", "category": "Ticketing", "est_monthly_txns": 1000000},
+    {"domain": "udemy.com", "name": "Udemy", "category": "Digital Education", "est_monthly_txns": 500000},
+    {"domain": "skillshare.com", "name": "Skillshare", "category": "Digital Education", "est_monthly_txns": 200000},
+    {"domain": "patreon.com", "name": "Patreon", "category": "Creator Economy", "est_monthly_txns": 300000},
+    {"domain": "gumroad.com", "name": "Gumroad", "category": "Creator Economy", "est_monthly_txns": 100000},
+    {"domain": "etsy.com", "name": "Etsy", "category": "Marketplace", "est_monthly_txns": 3000000},
+]
+
+# HubSpot properties for cross-country traffic data
+HS_COUNTRY_VISITS = {
+    "FR": "fr___annual_visits",
+    "ES": "es___annual_visits",
+    "IT": "it___annual_visits",
+}
+HS_COUNTRY_MONTHLY_VISITS = {
+    "FR": "fr___monthly_visits",
+    "ES": "es___monthly_visits",
+    "IT": "it___monthly_visits",
+}
+HS_DEAL_STAGES_WON = ["closedwon","deal won","won","onboarding completed","integration completed"]
+HS_DEAL_STAGES_LOST = ["closedlost","closed lost","lost","not interested","churn","terminated"]
+HS_DEAL_STAGES_WARM = ["discovery","negotiation","proposal","qualification","sql",
+    "discovery meetings","business meeting","proposal sent",
+    "validation & negotiation","final proposal to eb","in discussion",
+    "inbound created","target","nbm pending review",
+    "kyc pending approval","onboarding initiated","contract signed"]
+
+# Stage-aware stale deal thresholds (days without contact, holiday-adjusted)
+# Early stage: if no contact in 30d → dead
+# Mid stage: if no contact in 45d → check with AE
+# Late stage: if no contact in 60d → possibly waiting (legal, KYC)
+HS_STALE_THRESHOLDS = {
+    "early":  30,  # SQL, Inbound Created, Target, Discovery meetings
+    "mid":    45,  # Business Meeting, Proposal sent, Negotiation, In discussion
+    "late":   60,  # KYC Pending, Onboarding, Contract signed, Final proposal
+}
+HS_EARLY_STAGES = {"sql","inbound created","target","discovery meetings","discovery","qualification"}
+HS_LATE_STAGES = {"kyc pending approval","onboarding initiated",
+    "contract signed","final proposal to eb","validation & negotiation"}
 HS_CROSS_COUNTRY_PROPERTY = "cross_country_flag"

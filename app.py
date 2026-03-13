@@ -11,7 +11,7 @@ load_dotenv()
 
 from config import SCORING_WEIGHTS, WHITESPACE_CATEGORIES
 from similarweb_client import ingest
-from hubspot_client import enrich_with_hubspot
+from hubspot_client import enrich_with_hubspot, extract_non_sw_leads
 from enrichment import enrich_dataframe
 from scoring import score_dataframe
 from utils import get_logger
@@ -372,6 +372,17 @@ def run_pipeline():
         df["lead_warmth"] = "Net New"
         st.info("ℹ️ HubSpot disabled — all leads classified as Net New")
 
+    # Non-SW HubSpot leads (re-approachable)
+    non_sw_df = pd.DataFrame()
+    if enable_hubspot:
+        with st.spinner("🔍 Finding re-approachable HubSpot leads not in Similarweb..."):
+            non_sw_df = extract_non_sw_leads(df)
+            if not non_sw_df.empty:
+                st.info(f"📋 Found {len(non_sw_df)} HubSpot leads not in Similarweb (re-approachable)")
+            else:
+                st.caption("No additional HubSpot leads found outside SW list")
+    st.session_state["non_sw_leads"] = non_sw_df
+
     # ── PHASE 3: ENRICHMENT ──────────────────────────
     st.markdown("### 🔍 Phase 3 — Competitor & Ad Enrichment")
     if enable_scraping:
@@ -530,33 +541,288 @@ if "result_df" in st.session_state and st.session_state.result_df is not None:
     st.markdown("### 📥 Export")
 
     def gen_excel(dataframe):
+        """Generate Excel with DB sheet + per-country Action Lists."""
         out = io.BytesIO()
         with pd.ExcelWriter(out, engine="xlsxwriter") as w:
-            hdr = w.book.add_format({"bold": True, "bg_color": "#1e1b4b", "font_color": "#e2e8f0", "border": 1, "text_wrap": True})
-            dataframe.to_excel(w, sheet_name="All Leads", index=False)
-            ws = w.sheets["All Leads"]
+            book = w.book
+
+            # ── FORMATS ──────────────────────────────
+            hdr_fmt = book.add_format({"bold": True, "bg_color": "#1e1b4b", "font_color": "#e2e8f0",
+                                        "border": 1, "text_wrap": True, "align": "center", "valign": "vcenter",
+                                        "font_name": "Arial", "font_size": 10})
+            body_fmt = book.add_format({"font_name": "Arial", "font_size": 10, "font_color": "#1e293b",
+                                         "valign": "vcenter", "bottom": 1, "bottom_color": "#e2e8f0"})
+            muted_fmt = book.add_format({"font_name": "Arial", "font_size": 9, "font_color": "#64748b",
+                                          "valign": "vcenter", "bottom": 1, "bottom_color": "#e2e8f0"})
+            right_fmt = book.add_format({"font_name": "Arial", "font_size": 10, "font_color": "#1e293b",
+                                          "valign": "vcenter", "align": "right", "bottom": 1, "bottom_color": "#e2e8f0"})
+            center_fmt = book.add_format({"font_name": "Arial", "font_size": 10, "font_color": "#1e293b",
+                                           "valign": "vcenter", "align": "center", "bottom": 1, "bottom_color": "#e2e8f0"})
+            eur_fmt = book.add_format({"font_name": "Arial", "font_size": 10, "font_color": "#1e293b",
+                                        "valign": "vcenter", "align": "right", "num_format": '#,##0 €',
+                                        "bottom": 1, "bottom_color": "#e2e8f0"})
+            k_fmt = book.add_format({"font_name": "Arial", "font_size": 10, "font_color": "#1e293b",
+                                      "valign": "vcenter", "align": "right", "num_format": '#,##0',
+                                      "bottom": 1, "bottom_color": "#e2e8f0"})
+            k1_fmt = book.add_format({"font_name": "Arial", "font_size": 10, "font_color": "#1e293b",
+                                       "valign": "vcenter", "align": "right", "num_format": '#,##0.0',
+                                       "bottom": 1, "bottom_color": "#e2e8f0"})
+            drivers_fmt = book.add_format({"font_name": "Arial", "font_size": 9, "font_color": "#1e293b",
+                                            "valign": "vcenter", "text_wrap": True, "bottom": 1, "bottom_color": "#e2e8f0"})
+            alt_fill = book.add_format({"bg_color": "#f8fafc"})
+            legend_bold = book.add_format({"font_name": "Arial", "font_size": 9, "bold": True, "font_color": "#1e293b"})
+            legend_desc = book.add_format({"font_name": "Arial", "font_size": 9, "font_color": "#64748b"})
+
+            # ── HELPER FUNCTIONS ─────────────────────
+            def get_merchant(domain):
+                return str(domain).split(".")[0].replace("-", " ").replace("_", " ").title()
+
+            def get_priority(score, tier):
+                if score >= 70 and tier == "GOLD": return "A - Call this week"
+                if score >= 60: return "B - Pipeline this month"
+                if score >= 45: return "C - Nurture"
+                return "D - Park"
+
+            def build_drivers(r):
+                parts = []
+                t = r.get("tier", "")
+                if t == "GOLD": parts.append("Low-risk category")
+                elif t == "BRONZE": parts.append("High-risk category")
+                yoy = r.get("yoy_growth", 0) or 0
+                if yoy > 50: parts.append(f"Fast growth +{yoy:.0f}% YoY")
+                elif yoy > 20: parts.append(f"Solid growth +{yoy:.0f}% YoY")
+                elif yoy < -5: parts.append(f"Declining {yoy:.0f}% YoY")
+                ttv = r.get("est_ttv_annual_eur", 0) or 0
+                if ttv > 5e6: parts.append("High TTV potential")
+                elif ttv > 500e3: parts.append("Good TTV potential")
+                opp = r.get("opportunity_level", "TOP")
+                if opp == "TOP": parts.append("No BNPL at checkout")
+                elif opp == "MEDIUM-HIGH": parts.append("Minor BNPL only")
+                elif opp == "MEDIUM": parts.append("Direct competitor present")
+                elif opp == "LOW": parts.append("Saturated checkout")
+                warmth = str(r.get("lead_warmth", "Net New"))
+                if warmth == "Net New": parts.append("Net New")
+                elif "Lost >6" in warmth: parts.append("Re-approachable")
+                elif "Stale" in warmth: parts.append("Stale deal")
+                elif "Warm" in warmth: parts.append("Colleague working it")
+                return " | ".join(parts)
+
+            # ── SHEET 1: DB (full processed data) ────
+            dataframe.to_excel(w, sheet_name="DB", index=False)
+            ws_db = w.sheets["DB"]
             for i, col in enumerate(dataframe.columns):
-                ws.write(0, i, col, hdr)
+                ws_db.write(0, i, col, hdr_fmt)
                 ml = max(dataframe[col].astype(str).str.len().max(), len(col))
-                ws.set_column(i, i, min(ml + 2, 30))
+                ws_db.set_column(i, i, min(ml + 2, 28))
             if "Sales_Priority_Score" in dataframe.columns:
                 si = dataframe.columns.get_loc("Sales_Priority_Score")
-                ws.conditional_format(1, si, len(dataframe), si, {"type": "3_color_scale", "min_color": "#fca5a5", "mid_color": "#fde68a", "max_color": "#86efac"})
-            # Extra sheets
-            iberia = dataframe[dataframe["country"].isin(["ES", "PT"])]
-            france = dataframe[dataframe["country"] == "FR"]
-            italy = dataframe[dataframe["country"].isin(["IT"])]
-            if not iberia.empty: iberia.to_excel(w, sheet_name="Iberia (ES+PT)", index=False)
-            if not france.empty: france.to_excel(w, sheet_name="France", index=False)
-            if not italy.empty: italy.to_excel(w, sheet_name="Italy+Portugal", index=False)
-            for seg in ["Strategic", "Enterprise"]:
-                sd = dataframe[dataframe["account_segment"] == seg]
-                if not sd.empty: sd.to_excel(w, sheet_name=seg, index=False)
-            if "tier" in dataframe.columns:
-                dataframe[dataframe["tier"] == "GOLD"].to_excel(w, sheet_name="Gold Tier", index=False)
-            if "opportunity_level" in dataframe.columns:
-                top = dataframe[dataframe["opportunity_level"] == "TOP"]
-                if not top.empty: top.to_excel(w, sheet_name="TOP Opportunity", index=False)
+                ws_db.conditional_format(1, si, len(dataframe), si, {"type": "3_color_scale",
+                    "min_color": "#fca5a5", "mid_color": "#fde68a", "max_color": "#86efac"})
+            ws_db.freeze_panes(1, 0)
+            ws_db.autofilter(0, 0, len(dataframe), len(dataframe.columns) - 1)
+
+            # ── ACTION LIST BUILDER ──────────────────
+            cols_def = [
+                ("Merchant", 20), ("Domain", 22), ("Score", 8), ("Priority", 22),
+                ("Category", 22), ("Tier", 9), ("Segment", 12),
+                ("Est. TTV/yr (EUR)", 16), ("Monthly Traffic (K)", 15),
+                ("Annual Traffic (K)", 15), ("BNPL at Checkout", 22),
+                ("Competitors (#)", 14), ("Score Drivers", 58),
+            ]
+
+            def write_action_sheet(sheet_name, data):
+                data = data.sort_values("Sales_Priority_Score", ascending=False).reset_index(drop=True)
+                ws = w.book.add_worksheet(sheet_name)
+                w.sheets[sheet_name] = ws
+
+                # Headers
+                for ci, (name, width) in enumerate(cols_def):
+                    ws.write(0, ci, name, hdr_fmt)
+                    ws.set_column(ci, ci, width)
+                ws.freeze_panes(1, 0)
+                ws.autofilter(0, 0, len(data), len(cols_def) - 1)
+                ws.set_row(0, 34)
+
+                # Data rows
+                for ri, (_, r) in enumerate(data.iterrows()):
+                    row = ri + 1
+                    score = r.get("Sales_Priority_Score", 0) or 0
+                    tier = r.get("tier", "")
+                    comps_raw = r.get("competitors_list", "")
+                    if pd.isna(comps_raw) or str(comps_raw).strip() in ("", "None"):
+                        comps_raw = "None detected"
+                    n_comps = int(r.get("n_competitors", 0) or 0)
+                    mt = r.get("monthly_traffic", 0) or 0
+
+                    ws.write(row, 0, get_merchant(r["domain"]), body_fmt)
+                    ws.write(row, 1, r["domain"], muted_fmt)
+                    ws.write(row, 2, round(score, 1), center_fmt)
+                    ws.write(row, 3, get_priority(score, tier), body_fmt)
+                    ws.write(row, 4, r.get("scalapay_category", ""), body_fmt)
+                    ws.write(row, 5, tier, center_fmt)
+                    ws.write(row, 6, r.get("account_segment", ""), center_fmt)
+                    ws.write(row, 7, round(r.get("est_ttv_annual_eur", 0) or 0), eur_fmt)
+                    ws.write(row, 8, round(mt / 1000, 1) if mt else 0, k1_fmt)
+                    ws.write(row, 9, round(mt * 12 / 1000) if mt else 0, k_fmt)
+                    ws.write(row, 10, comps_raw, body_fmt)
+                    ws.write(row, 11, n_comps, center_fmt)
+                    ws.write(row, 12, build_drivers(r), drivers_fmt)
+
+                    ws.set_row(row, 26)
+                    # Alternate rows
+                    if row % 2 == 0:
+                        for ci in range(len(cols_def)):
+                            ws.set_row(row, 26, alt_fill)
+
+                last = len(data)
+
+                # Conditional formatting: Score (col 2)
+                ws.conditional_format(1, 2, last, 2, {"type": "3_color_scale",
+                    "min_color": "#f87171", "mid_color": "#fde68a", "max_color": "#4ade80"})
+
+                # Priority (col 3)
+                for letter, bg, fg in [("A", "#fee2e2", "#991b1b"), ("B", "#fff7ed", "#9a3412"),
+                                        ("C", "#fefce8", "#854d0e"), ("D", "#f1f5f9", "#475569")]:
+                    ws.conditional_format(1, 3, last, 3, {"type": "text", "criteria": "begins with",
+                        "value": letter, "format": book.add_format({"bg_color": bg, "font_color": fg,
+                        "bold": True, "font_name": "Arial", "font_size": 10})})
+
+                # Tier (col 5)
+                for val, bg, fg in [("GOLD", "#fef3c7", "#92400e"), ("SILVER", "#f1f5f9", "#475569"),
+                                     ("BRONZE", "#fed7aa", "#9a3412")]:
+                    ws.conditional_format(1, 5, last, 5, {"type": "cell", "criteria": "==",
+                        "value": f'"{val}"', "format": book.add_format({"bg_color": bg, "font_color": fg,
+                        "bold": True, "font_name": "Arial", "font_size": 10, "align": "center"})})
+
+                # Segment (col 6) — strong differentiation
+                for val, bg, fg in [("Strategic", "#7c3aed", "#ffffff"), ("Enterprise", "#2563eb", "#ffffff"),
+                                     ("Executive", "#f1f5f9", "#64748b")]:
+                    ws.conditional_format(1, 6, last, 6, {"type": "cell", "criteria": "==",
+                        "value": f'"{val}"', "format": book.add_format({"bg_color": bg, "font_color": fg,
+                        "bold": True, "font_name": "Arial", "font_size": 10, "align": "center"})})
+
+                # Competitors # (col 11)
+                ws.conditional_format(1, 11, last, 11, {"type": "3_color_scale",
+                    "min_type": "num", "min_value": 0, "min_color": "#dcfce7",
+                    "mid_type": "num", "mid_value": 1, "mid_color": "#fde68a",
+                    "max_type": "num", "max_value": 3, "max_color": "#fca5a5"})
+
+                # Legend below data
+                lr = last + 3
+                ws.write(lr, 0, "SCORING LEGEND", legend_bold)
+                legends = [
+                    ("Score", "0-100 composite. Higher = more attractive lead."),
+                    ("Priority A", "Score >= 70 + GOLD tier. Call this week."),
+                    ("Priority B", "Score >= 60. Pipeline this month."),
+                    ("Priority C", "Score >= 45. Nurture / soft approach."),
+                    ("Priority D", "Score < 45. Park for now."),
+                    ("", ""),
+                    ("GOLD", "Low-risk category (Pharma, Apparel, Food, Sport, Cosmetics...)"),
+                    ("SILVER", "Medium-risk (Home, Travel base, B2B...)"),
+                    ("BRONZE", "High-risk (Electronics, Jewelry, Auto, OTA/Hotel...)"),
+                    ("", ""),
+                    ("Strategic", "Est. TTV > EUR 5M/yr"),
+                    ("Enterprise", "Est. TTV EUR 500K - 5M/yr"),
+                    ("Executive", "Est. TTV < EUR 500K/yr"),
+                    ("", ""),
+                    ("Competitors 0", "No dedicated BNPL at checkout — best opportunity"),
+                    ("Competitors 1", "1 BNPL present — still approachable"),
+                    ("Competitors 2+", "Competitive / saturated checkout"),
+                    ("", ""),
+                    ("Score Drivers", "Plain-language: risk tier | growth | TTV | competition | CRM status"),
+                ]
+                for i, (label, desc) in enumerate(legends):
+                    if label:
+                        ws.write(lr + 1 + i, 0, label, legend_bold)
+                        ws.write(lr + 1 + i, 1, desc, legend_desc)
+
+                return len(data)
+
+            # ── WRITE COUNTRY ACTION LISTS ───────────
+            for co, name in [("FR", "FR - Action List"), ("ES", "ES - Action List"),
+                             ("PT", "PT - Action List"), ("IT", "IT - Action List")]:
+                co_data = dataframe[dataframe["country"] == co]
+                if not co_data.empty:
+                    write_action_sheet(name, co_data)
+
+            # ── COMPETITOR CONCENTRATION BY COUNTRY ───
+            def write_competitor_map(sheet_name, data):
+                """Pivot: category × competitor count. Shows where competition is concentrated."""
+                if "competitors_bnpl" not in data.columns or "scalapay_category" not in data.columns:
+                    return
+                ws = book.add_worksheet(sheet_name)
+                w.sheets[sheet_name] = ws
+
+                # Build pivot: category vs competitor names
+                from collections import Counter
+                cats = sorted(data["scalapay_category"].unique())
+                # Find all competitor names across this country
+                all_comp_names = Counter()
+                for val in data["competitors_bnpl"].dropna():
+                    if str(val).strip():
+                        for c in str(val).split(","):
+                            c = c.strip().title()
+                            if c: all_comp_names[c] += 1
+                comp_names = [c for c, _ in all_comp_names.most_common(10)]
+
+                # Headers
+                headers_row = ["Category", "Our Tier", "Total"] + comp_names + ["None Detected"]
+                for ci, h in enumerate(headers_row):
+                    ws.write(0, ci, h, hdr_fmt)
+                    ws.set_column(ci, ci, max(len(h) + 2, 12))
+                ws.set_column(0, 0, 24)
+                ws.freeze_panes(1, 0)
+                ws.set_row(0, 30)
+
+                for ri, cat in enumerate(cats, 1):
+                    cat_data = data[data["scalapay_category"] == cat]
+                    tier = cat_data["tier"].mode().iloc[0] if not cat_data["tier"].mode().empty else ""
+                    total = len(cat_data)
+
+                    ws.write(ri, 0, cat, body_fmt)
+                    ws.write(ri, 1, tier, center_fmt)
+                    ws.write(ri, 2, total, center_fmt)
+
+                    # Count each competitor in this category
+                    cat_comps = Counter()
+                    none_count = 0
+                    for _, r in cat_data.iterrows():
+                        comps = str(r.get("competitors_bnpl", "")).strip()
+                        if not comps or comps == "nan":
+                            none_count += 1
+                        else:
+                            for c in comps.split(","):
+                                c = c.strip().title()
+                                if c: cat_comps[c] += 1
+
+                    for ci, comp in enumerate(comp_names, 3):
+                        n = cat_comps.get(comp, 0)
+                        ws.write(ri, ci, n, center_fmt)
+
+                    ws.write(ri, len(comp_names) + 3, none_count, center_fmt)
+                    ws.set_row(ri, 22)
+
+                # Tier conditional formatting
+                last = len(cats)
+                for val, bg, fg in [("GOLD","#fef3c7","#92400e"),("SILVER","#f1f5f9","#475569"),("BRONZE","#fed7aa","#9a3412")]:
+                    ws.conditional_format(1,1,last,1,{"type":"cell","criteria":"==","value":f'"{val}"',
+                        "format":book.add_format({"bg_color":bg,"font_color":fg,"bold":True,"font_name":"Arial","font_size":10,"align":"center"})})
+
+            for co, name in [("FR", "FR - Competitor Map"), ("ES", "ES - Competitor Map"),
+                             ("PT", "PT - Competitor Map"), ("IT", "IT - Competitor Map")]:
+                co_data = dataframe[dataframe["country"] == co]
+                if not co_data.empty and (co_data["competitors_bnpl"].astype(str).str.strip() != "").any():
+                    write_competitor_map(name, co_data)
+
+            # ── NON-SW HUBSPOT LEADS ──────────────────
+            non_sw = st.session_state.get("non_sw_leads", pd.DataFrame())
+            if not non_sw.empty:
+                non_sw.to_excel(w, sheet_name="HS Re-approach", index=False)
+                ws_nsw = w.sheets["HS Re-approach"]
+                for i, col in enumerate(non_sw.columns):
+                    ws_nsw.write(0, i, col, hdr_fmt)
+                    ws_nsw.set_column(i, i, max(len(col) + 2, 15))
+
         out.seek(0)
         return out.getvalue()
 
@@ -574,25 +840,26 @@ if "result_df" in st.session_state and st.session_state.result_df is not None:
     # Methodology
     with st.expander("🔬 Score Breakdown & Methodology"):
         st.markdown("""
-        **Sales_Priority_Score** (0–100) = weighted composite:
+        **Sales_Priority_Score** (0-100) from 5 components. Account Size for territory assignment only.
 
         | Component | Default | What it measures |
         |-----------|---------|------------------|
-        | **Tier** | 25% | Country-specific (IT/FR/IB matrix). Travel: 14 risk sub-categories |
-        | **Account Size** | 20% | TTV-based: Strategic >€5M, Enterprise €500K–5M, Executive <€500K |
-        | **Penetration/TTV** | 15% | BNPL adoption × estimated MR |
+        | **Tier** | 25% | Country-specific risk (IT/FR/IB). Travel: 14 sub-categories |
+        | **Penetration/TTV** | 25% | BNPL adoption x estimated MR |
         | **Growth** | 15% | YoY (60%) + MoM (40%) traffic momentum |
-        | **Warmth** | 10% | HubSpot deal stage |
-        | **Competitor** | 10% | BNPL competitors on site |
+        | **Approachability** | 20% | Net New > Lost>6mo > Stale(45d) > Cold < Warm |
         | **Market Opportunity** | 15% | BNPL checkout competition (TOP/MEDIUM-HIGH/MEDIUM/LOW) |
 
-        **TTV Formula:**
-        `Monthly Transactions (real from SW) × AOV (per category) × BNPL Penetration (per category × country) × 12`
+        **TTV v5 Formula (TAM → SAM):**
+        1. Qualified Traffic = Monthly Traffic × (1 - Bounce Rate)
+        2. Transactions = SW real data (preferred) OR Qualified Traffic × CR(category)
+        3. Merchant Revenue = Transactions × AOV(category)
+        4. TAM = MR × BNPL Penetration(cat × country) × 12
+        5. AOV adjustment = TAM × AOV_Viability (low AOV like food delivery penalized)
+        6. **SAM = TAM × Competition Factor** (Alma in FR = 0.50, Klarna = 0.55, 3+ = 0.20)
 
-        When SW transactions unavailable: `Traffic × CR (median per category) × AOV × Pen × 12`
-
-        **Country tiering:** PT uses IT tiers. ES uses IB tiers.
-        **Travel sub-categories:** OTA/Hotel = BRONZE (high default risk), Tour Operator = SILVER, Theme Parks/Ticketing/Wellness = GOLD (low risk).
+        **Country tiering:** PT = Iberia (ES). IT = separate matrix.
+        **Travel sub-categories:** OTA/Hotel = BRONZE (high default risk), Theme Parks/Ticketing = GOLD (low risk).
         """)
 
 else:
